@@ -1,0 +1,34 @@
+# CCS Build Outputs
+CPU1_FLASH/
+CPU1_RAM/
+Debug/
+Release/
+
+# Object files
+*.obj
+*.out
+*.map
+*.pp
+*.asm
+
+# CCS Project files (generated)
+.launches/
+.config/
+targetConfigs/
+*.launch
+
+# CCS settings (keep .project and .cproject)
+.settings/
+.ccsproject
+
+# Temporary files
+*.tmp
+*.bak
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

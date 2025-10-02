@@ -1,0 +1,70 @@
+#include "driverlib.h"
+// #include "board.h"
+#include "HABA_shared.h"
+
+
+
+__interrupt void Cla1Task1(void) // PI_Controller_high
+{
+    Voh_Err    = Voh_cmd - Vfb;
+    Voh_p_out  = Kp * Voh_Err;
+    Voh_i_out += Ki * T_sample * Voh_Err;
+    cla_cnt++;
+
+    if      (Voh_i_out >  I_sat) Voh_i_out =  I_sat;
+    else if (Voh_i_out < -2.0f) Voh_i_out = -2.0f;
+
+    Voh_pi_out = Voh_p_out + Voh_i_out;
+
+    if      (Voh_pi_out >  I_MAX) Voh_pi_out =  I_MAX;
+    else if (Voh_pi_out < -2.0f) Voh_pi_out = -2.0f;
+}
+
+__interrupt void Cla1Task2(void) // PI_Controller_low
+{
+    Vol_Err    = Vol_cmd - Vfb;
+    Vol_p_out  = Kp * Vol_Err;
+    Vol_i_out += Ki * T_sample * Vol_Err;
+
+    if      (Vol_i_out >  2.0f) Vol_i_out = 2.0f;
+    else if (Vol_i_out < -I_MAX) Vol_i_out = -I_MAX;
+
+    Vol_pi_out = Vol_p_out + Vol_i_out;
+
+    if      (Vol_pi_out >  2.0f) Vol_pi_out = 2.0f;
+    else if (Vol_pi_out < -I_MAX) Vol_pi_out = -I_MAX;
+}
+
+__interrupt void Cla1Task3 ( void )
+{
+
+}
+
+__interrupt void Cla1Task4 ( void )
+{
+
+}
+
+__interrupt void Cla1Task5 ( void )
+{
+
+}
+
+__interrupt void Cla1Task6 ( void )
+{
+
+}
+
+__interrupt void Cla1Task7 ( void )
+{
+
+}
+
+__interrupt void Cla1Task8 ( void )
+{
+
+}
+
+//
+// End of file
+//

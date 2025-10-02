@@ -1,0 +1,36 @@
+/**
+ * These arguments were used when this file was generated. They will be automatically applied on subsequent loads
+ * via the GUI or CLI. Run CLI with '--help' for additional information on how to override these arguments.
+ * @cliArgs --device "F2837xD" --part "F2837xD_176PTP" --package "F2837xD_176PTP" --context "CPU1" --product "C2000WARE@5.05.00.00"
+ * @v2CliArgs --device "TMS320F28377D" --package "176PTP" --context "CPU1" --product "C2000WARE@5.05.00.00"
+ * @versions {"tool":"1.24.0+4110"}
+ */
+
+/**
+ * Import the modules used in this configuration.
+ */
+const ipc = scripting.addModule("/driverlib/ipc.js");
+
+/**
+ * Write custom configuration values to the imported modules.
+ */
+const divider3 = system.clockTree["EPWMCLKDIV"];
+scripting.suppress("ePWM TZFRC and TZCLR events will sometimes be missed when EPWMCLKDIV is divide by 2\\. Always program EPWMCLKDIV to divide by 1 if using TZFRC or TZCLR register\\. Please refer to the F2837xD Silicon Errata for more details\\.", divider3, "EPWMCLK");
+
+const divider4       = system.clockTree["LOSPCP"];
+divider4.divideValue = 1;
+
+const multiplier2         = system.clockTree["AUX_IMULT"];
+multiplier2.multiplyValue = 18;
+
+const multiplier4         = system.clockTree["PLL_IMULT"];
+multiplier4.multiplyValue = 18;
+
+const pinFunction3     = system.clockTree["XTAL"];
+pinFunction3.XTAL_Freq = 20;
+
+const default_warning = scripting.addModule("/driverlib/default_warning.js", {}, false);
+scripting.suppress("Add the \'Device Support\' module in order to use Clock Tree tool and generate device support files\\. This suggestion can be ignored if not using the Clock Tree tool\\.", default_warning);
+
+ipc.ipcRegisterFlag    = ["IPC_FLAG0","IPC_FLAG1"];
+ipc.registerInterrupts = ["0"];

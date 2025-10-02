@@ -1,0 +1,32 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "30kW_Master_controller_28377D_cpu1",
+            "type": "ccs-debug",
+            "request": "launch",
+            "projectInfo": {
+                "name": "30kW_Master_controller_28377D_cpu1",
+                "resourceId": "/30kW_Master_controller_28377D_cpu1"
+            },
+            "launchSettings": {
+                "coresToLoadForProjectLaunch": [
+                    "C28xx_CPU1"
+                ]
+            },
+            "connections": [
+                {
+                    "name": "Texas Instruments XDS100v2 USB Debug Probe",
+                    "cores": [
+                        {
+                            "name": "C28xx_CPU1",
+                            "debuggerSettings": {
+                                "data": "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\" ?>\n<PropertyValues/>\n"
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
