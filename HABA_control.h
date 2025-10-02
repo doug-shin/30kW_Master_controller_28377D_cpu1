@@ -1,7 +1,7 @@
-#ifndef HABA_CTRL_H
-#define HABA_CTRL_H
+#ifndef HABA_CONTROL_H
+#define HABA_CONTROL_H
 
-#include "HABA_shared.h"
+#include "HABA_globals.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -74,4 +74,4 @@ __interrupt void scidRxReadyISR(void);
 }
 #endif
 
-#endif // HABA_CTRL_H
+#endif // HABA_CONTROL_H

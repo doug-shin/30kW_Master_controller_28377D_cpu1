@@ -1,5 +1,5 @@
- #ifndef _HABA_SHARED_H_
-#define _HABA_SHARED_H_
+#ifndef HABA_GLOBALS_H
+#define HABA_GLOBALS_H
 
 #include "F28x_Project.h"              // TI 기본 레거시 포함
 #include "F2837xD_Cla_defines.h"       // CLA 구조체
@@ -563,4 +563,4 @@ extern volatile uint8_t SCADA_cmd;
 }
 #endif
 
-#endif // _HABA_SHARED_H_
+#endif // HABA_GLOBALS_H

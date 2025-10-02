@@ -1,5 +1,8 @@
-#include "HABA_Init.h"
-#include "HABA_Ctrl.h"
+//
+// HABA_setup.c - Hardware Initialization and System Setup
+//
+#include "HABA_setup.h"
+#include "HABA_control.h"
 
 void HABA_init()
 {

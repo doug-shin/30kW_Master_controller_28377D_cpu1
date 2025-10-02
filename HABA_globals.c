@@ -1,5 +1,8 @@
-#include "HABA_shared.h"
+//
+// HABA_globals.c - Global variables, constants and shared data definitions
+//
 
+#include "HABA_globals.h"
 
 #pragma DATA_SECTION(fVal,       "CpuToCla1MsgRAM");
 #pragma DATA_SECTION(Voh_cmd,    "CpuToCla1MsgRAM");

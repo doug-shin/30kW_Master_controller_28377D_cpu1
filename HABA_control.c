@@ -1,111 +1,102 @@
 //
-// HABA_Ctrl.c - Control logic, communication handlers and ISR implementation
+// HABA_control.c - Control logic, communication handlers and ISR implementation
 //
 
-#include "HABA_Ctrl.h"
-// #include <math.h>
+#include "HABA_control.h"
 #include <string.h>
 
+//==================================================
+// 디버그 모드 설정
+//==================================================
 #ifndef _DEBUG_CAN_STATUS_ENABLE_
-#define _DEBUG_CAN_STATUS_ENABLE_      ( 0 )
+#define _DEBUG_CAN_STATUS_ENABLE_      (0)
 #endif
 
 #ifndef _DEBUG_SCI_STATUS_ENABLE_
-#define _DEBUG_SCI_STATUS_ENABLE_      ( 0 )
+#define _DEBUG_SCI_STATUS_ENABLE_      (0)
 #endif
 
 #ifndef _DEBUG_SPI_STATUS_ENABLE_
-#define _DEBUG_SPI_STATUS_ENABLE_      ( 0 )
+#define _DEBUG_SPI_STATUS_ENABLE_      (0)
 #endif
 
 #ifndef _DEBUG_CLK_STATUS_ENABLE_
-#define _DEBUG_CLK_STATUS_ENABLE_      ( 0 )
+#define _DEBUG_CLK_STATUS_ENABLE_      (0)
 #endif
 
+//==================================================
+// 파일 내부 전역 변수
+//==================================================
 volatile uint16_t latestCurrentValue = 0;
-volatile uint8_t gRxFrame[4];   // 전역 변수
-    volatile uint16_t rxIndex = 0;
-    volatile uint8_t rxBuffer[4];
-//=============================
-// RAMFUNC 배치 선언
-//=============================
+volatile uint8_t  gRxFrame[4];
+volatile uint16_t rxIndex = 0;
+volatile uint8_t  rxBuffer[4];
+int8_t            parseCount = 0;
 
+//==================================================
+// 함수 전방 선언
+//==================================================
+static void parseFrame(uint8_t *buf, uint16_t len);
+//==================================================
+// [1] 제어 태스크 (5-Phase, 20kHz @ RAMFUNC)
+//==================================================
+
+//========================
+// Task 1: Sensing (전압/전류 센싱 및 캘리브레이션)
+//========================
 #pragma CODE_SECTION(sensing_task, ".TI.ramfunc");
-void sensing_task(void)     //20khz Task 1 전압 평균
+void sensing_task(void)
 {
-
-    Vo_ad_avg = (float32_t)(Vo_ad_sum * 0.2f);      //Vo_ad
+    // --- 출력 전압 (Vo) 평균 및 캘리브레이션 ---
+    Vo_ad_avg = (float32_t)(Vo_ad_sum * 0.2f);  // 5회 평균 (1/5 = 0.2)
     Vo_ad_sum = 0;
-    //fADC_voltage_out = (( Vo_ad_avg * (5. / 65535.))-0.1945) * (250. / 0.9611);
+
     fADC_voltage_out = Vo_ad_avg * 0.019856f - 50.573f;
-    // Vo_sen = (fADC_voltage_out - 0.00f) * 1.0f;
-    Vo_sen = (fADC_voltage_out + 0.091694057f) * 0.9926000888f;     // 교정값
+    Vo_sen = (fADC_voltage_out + 0.091694057f) * 0.9926000888f;  // 캘리브레이션 계수
     Vo = Vo_sen;
 
+    // --- 배터리 전압 (Vbat) 평균 및 캘리브레이션 ---
     Vbat_ad_avg = (float32_t)(Vbat_ad_sum * 0.2f);
     Vbat_ad_sum = 0;
-    //Vbat_ad_avg = (( Vbat_ad_avg * (5. / 65535.))-0.1945) * (250. / 0.9611);
+
     fADC_voltage_Bat = Vbat_ad_avg * 0.019856f - 50.573f;
-
-    // Vbat_sen = (fADC_voltage_Bat - 0.00f) * 1.0f;
-    Vbat_sen = (fADC_voltage_Bat - 0.3058461657f) * 0.9945009708f;      // 교정값
+    Vbat_sen = (fADC_voltage_Bat - 0.3058461657f) * 0.9945009708f;  // 캘리브레이션 계수
     Vbat = Vbat_sen;
-
-
-    // Io_ad_avg = (float32_t)(Io_ad_sum * 0.2f); // 100kHz에서 Io_ad를 더함 --> case4까지 총 5번 ePWM3_isr이 동작하므로 5개를 더한 것
-
-    // Io_ad_sum = 0;
-
-    // Io_sen_real = ((float32_t)Io_ad_avg * (5.0f / 65535.0f) * 600.0f) - 1500.0f;
-
 }
 
 
+//========================
+// Task 2: PI Control (소프트 스타트 + PI 제어)
+//========================
 #pragma CODE_SECTION(pi_control_task, ".TI.ramfunc");
-void pi_control_task(void)     // 20kHz Task 2 : PI + Soft Start
+void pi_control_task(void)
 {
     task_flag2 = 1;
 
-    //========================
-    // 1. 소프트 스타트 제한
-    //========================
-    soft_start_limit += CURRENT_LIMIT * 0.00005f;
+    // --- 1. 소프트 스타트 램프 ---
+    soft_start_limit += CURRENT_LIMIT * 0.00005f;  // 20kHz 램프 속도
     if (soft_start_limit > CURRENT_LIMIT)
-        soft_start_limit = CURRENT_LIMIT; // 최대 전류 제한
+        soft_start_limit = CURRENT_LIMIT;
 
-    //========================
-    // 2. 소프트 스타트 제한 처리
-    //========================
+    // --- 2. 소프트 스타트 제한 적용 ---
     if      (I_cmd >  soft_start_limit) I_cmd_ss =  soft_start_limit;
     else if (I_cmd < -soft_start_limit) I_cmd_ss = -soft_start_limit;
     else                                I_cmd_ss =  I_cmd;
 
-    //========================
-    // 3. 저역통과 필터 적용 (LPF)
-    //========================
+    // --- 3. 저역통과 필터 (LPF: fc=1kHz, Ts=50us) ---
     I_cmd_filt = La_Ee * (I_cmd_ss + I_cmd_old) + Lb_Ee * I_cmd_filt;
     I_cmd_old  = I_cmd_ss;
 
-    //========================
-    // 4. CLA PI 적분항 제한값 갱신
-    //========================
-    I_sat = I_cmd_filt;   // CLA 내부 anti-windup에서 사용됨
+    // --- 4. CLA PI 제어기 anti-windup 한계값 ---
+    I_sat = I_cmd_filt;
 
-    //========================
-    // 5. 운전 모드 & Master_ID 분기
-    //========================
+    // --- 5. PI 제어기 실행 (CLA Task 호출) ---
+    PI_Controller();
 
-    PI_Controller(); // PI 제어기 동작
-
-    if (operation_mode == MODE_PARALLEL) // 병렬 운전 모드
+    // --- 6. 운전 모드별 최종 전류 지령 계산 ---
+    if (operation_mode == MODE_PARALLEL)  // 병렬 운전
     {
-        // if((over_voltage_flag || over_current_flag || over_temp_flag) != 1)
-        // {
-        //     GPIO_writePin(LED_DUAL, 1);   // F_LED1 전면 LED_DUAL ON
-        //     GPIO_writePin(LED_SINGLE, 0); // F_LED2 전면 LED_SINGLE OFF
-        // }
-
-        if (Master_ID == 0)
+        if (Master_ID == 0)  // 상위 마스터: PI 출력 사용
         {
             Master_Mode = 1;
             if      (I_cmd_filt >  Voh_pi_out) I_cmd_final = Voh_pi_out;
@@ -115,20 +106,14 @@ void pi_control_task(void)     // 20kHz Task 2 : PI + Soft Start
             if (I_cmd_final >  I_MAX) I_cmd_final =  I_MAX;
             if (I_cmd_final < -I_MAX) I_cmd_final = -I_MAX;
         }
-        else
+        else  // 하위 마스터: 상위에서 전달받은 값 사용
         {
             Master_Mode = 2;
-            I_cmd_final = I_cmd_from_master; // 상위에서 전달받은 값 사용
+            I_cmd_final = I_cmd_from_master;
         }
     }
-    else if (operation_mode == MODE_INDEPENDENT) // 독립 운전 모드
+    else if (operation_mode == MODE_INDEPENDENT)  // 독립 운전
     {
-        // if((over_voltage_flag || over_current_flag || over_temp_flag) != 1)
-        // {
-        //     GPIO_writePin(LED_SINGLE, 1);     // F_LED2 전면 LED_SINGLE ON
-        //     GPIO_writePin(LED_DUAL, 0);       // F_LED1 전면 LED_DUAL OFF
-        // }
-
         Master_Mode = 1;
 
         if      (I_cmd_filt >  Voh_pi_out) I_cmd_final = Voh_pi_out;
@@ -138,7 +123,7 @@ void pi_control_task(void)     // 20kHz Task 2 : PI + Soft Start
         if (I_cmd_final >  I_MAX) I_cmd_final =  I_MAX;
         if (I_cmd_final < -I_MAX) I_cmd_final = -I_MAX;
     }
-    else // 정지 모드
+    else  // 정지 모드
     {
         if      (I_cmd_filt >  Voh_pi_out) I_cmd_final = Voh_pi_out;
         else if (I_cmd_filt <  Vol_pi_out) I_cmd_final = Vol_pi_out;
@@ -148,109 +133,83 @@ void pi_control_task(void)     // 20kHz Task 2 : PI + Soft Start
         if (I_cmd_final < -I_MAX) I_cmd_final = -I_MAX;
     }
 
-    //========================
-    // 6. DAC 출력 변환
-    //========================
+    // --- 7. DAC 출력 변환 (±100A → 0~65535) ---
     I_cmd_DAC = I_cmd_final * 327.68f + 32768.0f;
     if (I_cmd_DAC > 65535) I_cmd_DAC = 65535;
 
-    // I_cmd_DAC = ((I_cmd_final / 100.0f) + 1.0f) / 2.0f * 65536.0f;
-    // if (I_cmd_DAC > 65535) I_cmd_DAC = 65535;
-
-    //========================
-    // 7. 정지 상태 처리
-    //========================
+    // --- 8. 정지 상태 변수 초기화 ---
     if (Run == 0)
     {
-        GPIO_writePin(8,0); // Relay 8
-        Siwtch_flag = 0;
+        GPIO_writePin(8, 0);  // Relay 8 OFF
+        Siwtch_flag      = 0;
         soft_start_limit = 0.0f;
-        I_cmd_ss        = 0.0f;
-        I_out_ref       = 0.0f;
-        // I_cmd_final     = 0.0f;
-        // I_cmd_DAC       = 32768;
-        I_sat           = 0.0f;
-        task_flag2      = 0;
+        I_cmd_ss         = 0.0f;
+        I_out_ref        = 0.0f;
+        I_sat            = 0.0f;
+        task_flag2       = 0;
     }
 }
 
 
+//========================
+// Task 3: Current Command (전류 지령 전송)
+//========================
 #pragma CODE_SECTION(current_command_task, ".TI.ramfunc");
-void current_command_task(void) // 20kHz Task3
+void current_command_task(void)
 {
     task_flag3 = 1;
 
-    if (operation_mode == MODE_PARALLEL) // 병렬 운전 모드
+    if (operation_mode == MODE_PARALLEL)  // 병렬 운전
     {
-        if (Master_ID == 0)
+        if (Master_ID == 0)  // 상위 마스터
         {
-            send_485B_CurrentCommand(I_cmd_DAC);  // 자기 슬레이브
-            send_485A_CurrentCommand(I_cmd_DAC);  // Master2에게 전송
+            send_485B_CurrentCommand(I_cmd_DAC);  // 자기 슬레이브에 전송
+            send_485A_CurrentCommand(I_cmd_DAC);  // 하위 마스터(Master2)에 전송
         }
-        else
+        else  // 하위 마스터
         {
             I_cmd_final = I_cmd_from_master;
-            send_485B_CurrentCommand(I_cmd_from_master); // 자기 DAC만 갱신
+            send_485B_CurrentCommand(I_cmd_from_master);  // 자기 슬레이브에만 전송
         }
     }
-    else // 독립 운전 모드, 정지 모드
+    else  // 독립 운전 또는 정지 모드
     {
         send_485A_CurrentCommand(I_cmd_DAC);
         send_485B_CurrentCommand(I_cmd_DAC);
     }
-
 }
 
-
-
-
+//========================
+// Task 4: Temperature (고장 체크 및 릴레이 제어)
+//========================
 #pragma CODE_SECTION(temperature_task, ".TI.ramfunc");
-void temperature_task(void)     // 20kHz Task 4 : 온도 측정
+void temperature_task(void)
 {
-
     Fault_Check();
     task_flag4 = 1;
     Emergency_Stop_Switch();
     Relay_control();
 
-    // // NTC0
-    // uint16_t adc0 = ADC_readResult(ADCARESULT_BASE, ADC_SOC_NUMBER0);
-    // NTC0_Temp = calcNTCTemp(((float)adc0 * (3.3f / 4095.0f) * 1000) /
-    //                         (3.3f - ((float)adc0 * (3.3f / 4095.0f))) / 1000.0f);
-
-    // // NTC1
-    // uint16_t adc1 = ADC_readResult(ADCARESULT_BASE, ADC_SOC_NUMBER1);
-    // NTC1_Temp = calcNTCTemp(((float)adc1 * (3.3f / 4095.0f) * 1000) /
-    //                         (3.3f - ((float)adc1 * (3.3f / 4095.0f))) / 1000.0f);
-
-
+    // NTC 온도 센싱 (현재 비활성화)
+    // TODO: ADC 기반 NTC 온도 측정 구현 필요 시 활성화
 }
 
-
+//========================
+// Task 5: Average (장기 평균 및 시퀀스)
+//========================
 #pragma CODE_SECTION(average_task, ".TI.ramfunc");
-void average_task(void)     //20khz Task 5 평균전압/전류 및 시퀀스 동작
+void average_task(void)
 {
-   task_flag5 = 1;
+    task_flag5 = 1;
 
-    //   // --- 장기 평균 (2000번 = 10ms) ---
-    // Io_sen_sum_monitor += Io_sen_real;
-    // if (Current_Average++ >= 2000)
-    // {
-    //     Io_Mean = Io_sen_sum_monitor * 0.0005f;  // = sum / 2000
-    //     Io_sen_sum_monitor = 0.0f;
-    //     Current_Average = 0;
-
-    //     Io_avg = Io_Mean;  // 모니터링용 전류 평균
-    // }
-
-    // --- 장기 평균 (200번 = 10ms) ---
+    // --- 장기 평균 (200회 = 10ms @ 20kHz) ---
     Vo_sen_sum_monitor  += Vo_sen;
     Bat_sen_sum_monitor += Vbat_sen;
 
     if (++MonitoringCount >= 200)
     {
-        Vo_Mean  = Vo_sen_sum_monitor * 0.005f;  // = sum / 200
-        Bat_Mean = Bat_sen_sum_monitor * 0.005f; // = sum / 200
+        Vo_Mean  = Vo_sen_sum_monitor * 0.005f;   // = sum / 200
+        Bat_Mean = Bat_sen_sum_monitor * 0.005f;  // = sum / 200
 
         Vo_sen_sum_monitor  = 0.0f;
         Bat_sen_sum_monitor = 0.0f;
@@ -264,9 +223,15 @@ void average_task(void)     //20khz Task 5 평균전압/전류 및 시퀀스 동
 
 
 
+//==================================================
+// [2] 제어 지원 함수
+//==================================================
+
+//========================
+// 통신 상태 모니터링
+//========================
 void Communication_Status(void)
 {
-
 #if _DEBUG_CAN_STATUS_ENABLE_
     debug_CAN_status();
 #endif
@@ -278,129 +243,91 @@ void Communication_Status(void)
 #endif
 }
 
+//========================
+// UI 모니터링 (HMI 데이터 처리)
+//========================
 void UI_monitoring(void)
 {
-    // [HMI 처리] HMI로부터 받은 값을 실제 제어 변수에 반영
-    // if (hmi_packet_ready)
-    // {
-    //     g_systemRunCommand = hmi_rx_data.command;
-    //     g_maxVoltageSet = hmi_rx_data.max_voltage;
-    //     g_minVoltageSet = hmi_rx_data.min_voltage;
-    //     g_currentCommandSet = hmi_rx_data.current_cmd;
-    //     hmi_packet_ready = 0;
-    // }
-
     Voh_com = V_high_limit;
-
     Vol_com = V_low_limit;
 
+    // 슬레이브 출력 전류 합산 (Ch1~10)
     Io_sen_total =
         I_out_ch[1] + I_out_ch[2] + I_out_ch[3] +
         I_out_ch[4] + I_out_ch[5] + I_out_ch[6] + I_out_ch[7] +
         I_out_ch[8] + I_out_ch[9] + I_out_ch[10];
 
-//    Icom_temp = I_out_ref / MODULE_NUM;
-
+    // 전류 지령 리미터
     Icom_temp = I_out_ref;
-
-    if     (Icom_temp >  I_MAX) Icom_temp =  I_MAX; // detect_module_num * 80
-    else if(Icom_temp < -I_MAX) Icom_temp = -I_MAX;
+    if      (Icom_temp >  I_MAX) Icom_temp =  I_MAX;
+    else if (Icom_temp < -I_MAX) Icom_temp = -I_MAX;
 
     I_cmd = Icom_temp;
-
 }
 
-
-
+//========================
+// 고장 체크 및 LED 제어
+//========================
 void Fault_Check(void)
 {
-    if (Vo_Mean >= OVER_VOLTAGE) over_voltage_flag = 1;
-    if (fabs(Io_avg) >= OVER_CURRENT) over_current_flag = 1;
+    // --- 고장 플래그 설정 ---
+    if (Vo_Mean >= OVER_VOLTAGE)                          over_voltage_flag = 1;
+    if (fabs(Io_avg) >= OVER_CURRENT)                     over_current_flag = 1;
     if (NTC0_Temp >= OVER_TEMP || NTC1_Temp >= OVER_TEMP) over_temp_flag = 1;
 
-    // if (Vbat_Mean <= UNDER_VOLTAGE) under_voltage_flag = 1;
-    // if (can_rx_fault_cnt > CAN_FAULT_LIMIT)can_fault_flag = 1;
-    // if (hw_fault != 0) hw_fault_flag = 1;
-
-    // === Run 조건 ===
-    // if (over_voltage_flag || under_voltage_flag ||
-    //     over_current_flag || over_temp_flag ||
-    //     can_fault_flag || hw_fault_flag)
-
-
-    // if (run_switch && !(over_voltage_flag || over_current_flag || over_temp_flag)) {
-    //     GPIO_writePin(LED_FAULT, 0); // F_LED4 전면 LED_FAULT OFF
-    //     Run = 1;
-    // } else {
-    //     Run = 0;
-    // }
+    // --- Run 조건 판정 ---
     if (run_switch) {
         Run = 1;
     } else {
         Run = 0;
     }
 
+    // --- LED 상태 표시 ---
     if ((over_voltage_flag || over_current_flag || over_temp_flag) == 1)
     {
         Master_fault_flag = 0;
-        GPIO_writePin(LED_FAULT, 1);     // F_LED4 전면 LED_FAULT ON
-        GPIO_writePin(LED_CHARGE, 0);    // F_LED2 전면 LED_CHARGE OFF
-        GPIO_writePin(LED_DISCHARGE, 0); // F_LED3 전면 LED_DISCHARGE OFF
-        GPIO_writePin(LED_SINGLE, 0);    // F_LED5 전면 LED_SINGLE OFF
-        GPIO_writePin(LED_DUAL, 0);      // F_LED6 전면 LED_DUAL OFF
+        GPIO_writePin(LED_FAULT, 1);      // F_LED3 FAULT ON
+        GPIO_writePin(LED_CHARGE, 0);     // F_LED5 CHARGE OFF
+        GPIO_writePin(LED_DISCHARGE, 0);  // F_LED4 DISCHARGE OFF
+        GPIO_writePin(LED_SINGLE, 0);     // F_LED2 SINGLE OFF
+        GPIO_writePin(LED_DUAL, 0);       // F_LED1 DUAL OFF
     }
     else
     {
         Master_fault_flag = 1;
-        GPIO_writePin(LED_FAULT, 0);    // F_LED4 전면 LED_FAULT OFF
+        GPIO_writePin(LED_FAULT, 0);      // F_LED3 FAULT OFF
     }
-
 }
 
-
-
-
-//=============================
-// PI 제어 루프
-//=============================
+//========================
+// PI 제어기 (CLA Task 호출)
+//========================
 #pragma CODE_SECTION(PI_Controller, ".TI.ramfunc");
 void PI_Controller(void)
 {
-    Kp = Kp_set;
-    Ki = Ki_set;
+    // CLA 파라미터 설정
+    Kp       = Kp_set;
+    Ki       = Ki_set;
     T_sample = T_sample_set;
-    I_MAX = CURRENT_LIMIT;
+    I_MAX    = CURRENT_LIMIT;
 
     Voh_PI = Voh_cmd;
     Vol_PI = Vol_cmd;
 
-    Cla1ForceTask1(); // PI_high 제어기 동작
-    Cla1ForceTask2(); // PI_low 제어기 동작
-
-    // if ((over_voltage_flag || over_current_flag || over_temp_flag) != 1)
-    // {
-    //     if (I_out_ref > 0) // 충전 상태
-    //     {
-    //         GPIO_writePin(LED_CHARGE, 1);    // F_LED5 전면 LED_CHARGE ON
-    //         GPIO_writePin(LED_DISCHARGE, 0); // F_LED4 전면 LED_DISCHARGE OFF
-    //     }
-    //     else if(I_out_ref < 0) // 방전 상태
-    //     {
-    //         GPIO_writePin(LED_DISCHARGE, 1); // F_LED4 전면 LED_DISCHARGE ON
-    //         GPIO_writePin(LED_CHARGE, 0);   // F_LED5 전면 LED_CHARGE OFF
-    //     }
-    //     else // 정지 상태
-    //     {
-    //         GPIO_writePin(LED_CHARGE, 0);    // F_LED5 전면 LED_CHARGE OFF
-    //         GPIO_writePin(LED_DISCHARGE, 0); // F_LED4 전면 LED_DISCHARGE OFF
-    //     }
-    // }
-
+    // CLA Task 강제 실행
+    Cla1ForceTask1();  // PI_high 제어기 (충전 모드)
+    Cla1ForceTask2();  // PI_low 제어기 (방전 모드)
 }
 
 
 
-// 필요시 추가 (통신 관련)
+//==================================================
+// [3] CAN 통신 (슬레이브 모듈 제어)
+//==================================================
+
+//========================
+// CAN 메시지 송신
+//========================
 #pragma CODE_SECTION(send_CANA_Message, ".TI.ramfunc");
 void send_CANA_Message(int8_t CAN_CMD)
 {
@@ -412,6 +339,9 @@ void send_CANA_Message(int8_t CAN_CMD)
     CAN_sendMessage(CANA_BASE, TX_MSG_OBJ_ID1, MSG_DATA_LENGTH, CANA_txData);
 }
 
+//========================
+// CAN 메시지 일괄 수신 (사용 안 함)
+//========================
 #pragma CODE_SECTION(read_CANA_Messages, ".TI.ramfunc");
 void read_CANA_Messages(void)
 {
@@ -420,50 +350,53 @@ void read_CANA_Messages(void)
     {
         CAN_readMessage(CANA_BASE,
                         RX_MSG_OBJ_BASE_ID + i,
-                        CANA_rxDataArray[i]);  // rxDataArray[i]는 uint8_t 포인터 배열
+                        CANA_rxDataArray[i]);
     }
 }
 
-// 1회 탐색 (while 전에 실행)
+//========================
+// 슬레이브 초기화 (초기 탐색)
+//========================
 void detect_active_slaves(void)
 {
     for (int i = 0; i < 32; i++)
     {
-        slave_enabled[i] = false;
-        ch_current[i]    = 0;
-        I_out_ch[i]      = 0;
-        Temp_ch[i]       = 0;
-        DAB_ok_ch[i]     = 0;
-        can_rx_fault_cnt[i] = 0;
+        slave_enabled[i]     = false;
+        ch_current[i]        = 0;
+        I_out_ch[i]          = 0;
+        Temp_ch[i]           = 0;
+        DAB_ok_ch[i]         = 0;
+        can_rx_fault_cnt[i]  = 0;
     }
 }
 
-
+//========================
+// 슬레이브 데이터 읽기 (개별 메일박스)
+//========================
 #pragma CODE_SECTION(CAN_SlaveRead, ".TI.ramfunc");
 bool CAN_SlaveRead(uint16_t mbox)
 {
     bool status;
     if (mbox < 2 || mbox > 32) return false;
 
-    // rxData는 전역 uint16_t rxData[4] 로 선언
     status = CAN_readMessage(CANA_BASE, mbox, rxData);
 
     if (status)
     {
-        // === 수신 데이터 파싱 (4바이트) ===
+        // 수신 데이터 파싱 (4바이트)
         uint8_t byte0 = rxData[0];
         uint8_t byte1 = rxData[1];
         uint8_t byte2 = rxData[2];
         uint8_t byte3 = rxData[3];
 
-        uint16_t ch = mbox - 1;   // ch index: 1~31
+        uint16_t ch = mbox - 1;  // ch index: 1~31
 
-        // 조합
-        ch_current[ch] = ((uint16_t)byte0 << 8) | byte1;   // 0x7FDC
+        // 전류 (16bit), 온도 (12bit), DAB_OK (1bit)
+        ch_current[ch] = ((uint16_t)byte0 << 8) | byte1;
         Temp_ch[ch]    = (byte2 << 4) | ((byte3 & 0xF0) >> 4);
         DAB_ok_ch[ch]  = byte3 & 0x01;
 
-        // 정규화된 전류 계산
+        // 전류 정규화: 0~65535 → -100~100A
         I_out_ch[ch] = (((float)ch_current[ch] / 65535.0f) * 2.0f - 1.0f) * 100.0f;
 
         can_rx_fault_cnt[ch] = 0;
@@ -471,13 +404,14 @@ bool CAN_SlaveRead(uint16_t mbox)
     }
     else
     {
+        // 수신 실패 시 카운트 증가
         uint16_t ch = mbox - 1;
         if (can_rx_fault_cnt[ch]++ >= 10000)
         {
-            I_out_ch[ch]    = 0;
-            Temp_ch[ch]     = 0;
-            DAB_ok_ch[ch]   = 0;
-            ch_current[ch]  = 0;
+            I_out_ch[ch]         = 0;
+            Temp_ch[ch]          = 0;
+            DAB_ok_ch[ch]        = 0;
+            ch_current[ch]       = 0;
             can_rx_fault_cnt[ch] = 10000;
         }
         return false;
@@ -485,6 +419,13 @@ bool CAN_SlaveRead(uint16_t mbox)
 }
 
 
+//==================================================
+// [4] SPI 통신 (DAC 및 FPGA)
+//==================================================
+
+//========================
+// DAC80502 SPI 제어 (SPIA)
+//========================
 #pragma CODE_SECTION(SPIDAC1, ".TI.ramfunc");
 void SPIDAC1(uint8_t cmd_byte, uint16_t dac_data)
 {
@@ -493,36 +434,31 @@ void SPIDAC1(uint8_t cmd_byte, uint16_t dac_data)
     SPI_writeDataBlockingFIFO(SPIA_BASE, ((uint16_t)(dac_data & 0xFF)) << 8);
 }
 
-
+//========================
+// FPGA 데이터 읽기 (SPIC)
+//========================
 #pragma CODE_SECTION(read_FPGA_data, ".TI.ramfunc");
 void read_FPGA_data(void)
 {
-    // SPI_writeDataNonBlocking(SPIC_BASE, 0x0000);
-    // SPI_writeDataNonBlocking(SPIC_BASE, 0x0000);
-    // SPI_writeDataNonBlocking(SPIC_BASE, 0x0000);
-    // Vo_ad= SPI_readDataNonBlocking(SPIC_BASE);
-    // Vbat_ad= SPI_readDataNonBlocking(SPIC_BASE);
-    // Io_ad= SPI_readDataNonBlocking(SPIC_BASE);
-
-    // === Dummy Write (FPGA에서 데이터 밀어내기) ===
+    // Dummy Write (FPGA 데이터 밀어내기)
     HWREGH(SPIC_BASE + SPI_O_TXBUF) = 0x0000;
     HWREGH(SPIC_BASE + SPI_O_TXBUF) = 0x0000;
     HWREGH(SPIC_BASE + SPI_O_TXBUF) = 0x0000;
 
-    // // === RX FIFO에 3워드 들어올 때까지 대기 ===
-    // while(HWREGH(SPIC_BASE + SPI_O_FFRX) < 3);
-
-    // === Read ===
-//     Io_ad   = HWREGH(SPIC_BASE + SPI_O_RXBUF);
-//     Vo_ad   = HWREGH(SPIC_BASE + SPI_O_RXBUF);
-//     Vbat_ad = HWREGH(SPIC_BASE + SPI_O_RXBUF);
+    // 실제 읽기는 ISR에서 수행 (spicRxISR)
 }
 
+//==================================================
+// [5] RS485 통신 (전류 지령 전송)
+//==================================================
 
+//========================
+// RS485-A 전류 지령 송신 (상위 마스터 → 하위 마스터)
+//========================
 #pragma CODE_SECTION(send_485A_CurrentCommand, ".TI.ramfunc");
 void send_485A_CurrentCommand(uint16_t current)
 {
-    if (Master_ID == 0)
+    if (Master_ID == 0)  // 상위 마스터만 송신
     {
         gSciATxBuf[0] = STX;
         gSciATxBuf[1] = current & 0xFF;
@@ -532,13 +468,13 @@ void send_485A_CurrentCommand(uint16_t current)
         for (int i = 0; i < 4; i++)
         {
             HWREGH(SCIA_BASE + SCI_O_TXBUF) = gSciATxBuf[i];
-            // SCI_writeCharNonBlocking(SCIA_BASE, gSciATxBuf[i]);
         }
     }
 }
 
-
-
+//========================
+// RS485-B 전류 지령 송신 (마스터 → 슬레이브)
+//========================
 #pragma CODE_SECTION(send_485B_CurrentCommand, ".TI.ramfunc");
 void send_485B_CurrentCommand(uint16_t current)
 {
@@ -550,72 +486,82 @@ void send_485B_CurrentCommand(uint16_t current)
 
     for (i = 0; i < 4; i++)
     {
-        // === driverlib SCI_writeCharNonBlocking 내용물만 사용 ===
         HWREGH(SCIB_BASE + SCI_O_TXBUF) = gSciBTxBuf[i];
-        // SCI_writeCharNonBlocking(SCIB_BASE, gSciBTxBuf[i]);
-        // SCI_writeCharBlockingNonFIFO(SCIB_BASE, gSciTxBuf[i]);
     }
 }
 
+//==================================================
+// [6] GPIO 제어 및 유틸리티
+//==================================================
+
+//========================
+// 릴레이 제어
+//========================
 void Relay_control(void)
 {
-    GPIO_writePin(8, (Relay8_on_off == 1) ? 1 : 0);
-    GPIO_writePin(9, (Relay7_on_off == 1) ? 1 : 0);
-    //Digital_Ouput(27,Relay1_on_off);
+    GPIO_writePin(8, (Relay8_on_off == 1) ? 1 : 0);  // Relay 8 (독립 운전)
+    GPIO_writePin(9, (Relay7_on_off == 1) ? 1 : 0);  // Relay 7 (병렬 운전)
 }
 
-
+//========================
+// 디지털 입력 읽기
+//========================
 uint16_t Digtal_Input(uint16_t gpioPin)
 {
     return GPIO_readPin(gpioPin);
 }
 
-
-// LED 동작 확인을 위한 주석처리
+//========================
+// Master ID 선택 (GPIO36~39 DIP 스위치)
+//========================
 void Master_ID_Select(void)
 {
-    #if 1
-    // 디지털 입력 읽기 (GPIO36 ~ GPIO39)
+#if 1
     DigitalIn.bit.Bit0 = GPIO_readPin(36);
     DigitalIn.bit.Bit1 = GPIO_readPin(37);
     DigitalIn.bit.Bit2 = GPIO_readPin(38);
     DigitalIn.bit.Bit3 = GPIO_readPin(39);
 
-    Master_ID = 0x0000 | ((DigitalIn.bit.Bit3 & 0x1) << 3) |
-                         ((DigitalIn.bit.Bit2 & 0x1) << 2) |
-                         ((DigitalIn.bit.Bit1 & 0x1) << 1) |
-                         ((DigitalIn.bit.Bit0 & 0x1) << 0);
-    #endif
+    Master_ID = ((DigitalIn.bit.Bit3 & 0x1) << 3) |
+                ((DigitalIn.bit.Bit2 & 0x1) << 2) |
+                ((DigitalIn.bit.Bit1 & 0x1) << 1) |
+                ((DigitalIn.bit.Bit0 & 0x1) << 0);
+#endif
 }
 
+//========================
+// NTC 온도 계산 (LUT 보간)
+//========================
 #pragma CODE_SECTION(calcNTCTemp, ".TI.ramfunc");
 float calcNTCTemp(float R_ntc)
 {
     float temperature_c = 0.0f;
     int i;
 
-    // LUT 탐색
-    for (i = 0; i < (sizeof(LUT_Resistance)/sizeof(LUT_Resistance[0])) - 1; i++) {
-        if (R_ntc <= LUT_Resistance[i] && R_ntc >= LUT_Resistance[i+1]) {
+    // LUT 탐색 (-40°C ~ 120°C)
+    for (i = 0; i < (sizeof(LUT_Resistance)/sizeof(LUT_Resistance[0])) - 1; i++)
+    {
+        if (R_ntc <= LUT_Resistance[i] && R_ntc >= LUT_Resistance[i+1])
+        {
             // 선형 보간
             float R1 = LUT_Resistance[i];
             float R2 = LUT_Resistance[i+1];
-            float T1 = (float)(-40 + i);     // 시작값 -40 °C 직접 삽입
-            float T2 = (float)(-40 + i + 1); // 다음 온도
+            float T1 = (float)(-40 + i);
+            float T2 = (float)(-40 + i + 1);
 
             temperature_c = T1 + (T2 - T1) * (R_ntc - R1) / (R2 - R1);
             break;
         }
     }
 
-    return temperature_c;   // °C 반환
+    return temperature_c;
 }
 
-
-
+//========================
+// 비상 정지 스위치 읽기 (GPIO11)
+//========================
 Uint16 Emergency_Stop_Switch(void)
 {
-    // 스위치 상태만 별도로 저장
     run_switch = GPIO_readPin(11);
     return run_switch;
 }
@@ -623,10 +569,22 @@ Uint16 Emergency_Stop_Switch(void)
 
 
 
+//==================================================
+// [7] 시퀀스 제어 모듈
+//==================================================
+
+//========================
+// 시퀀스 제어 (Precharge → Relay ON → Run)
+//========================
+// sequence_step 진행:
+//   0   → Idle (대기)
+//   10  → Precharge (예비 충전)
+//   20  → Main relay ON (정상 운전)
+//   Fault → 자동 차단 (과전압/과전류/과온)
+//========================
 void Sequence_Module(void)
 {
-
-    #if 0
+#if 0  // ===== 구 버전 (state machine, 현재 비활성화) =====
     switch (state)
     {
         case STATE_NO_OP:
@@ -841,7 +799,11 @@ void Sequence_Module(void)
     #endif
 }
 
-int8_t parseCount = 0;
+//========================
+// parseFrame Helper (SCIA 수신 프레임 파싱)
+//========================
+// STX로 시작하는 4바이트 프레임에서 전류 지령 추출
+//========================
 void parseFrame(uint8_t *buf, uint16_t len)
 {
     if(len == 4 && buf[0] == STX)
@@ -857,37 +819,40 @@ void parseFrame(uint8_t *buf, uint16_t len)
     }
 }
 
+//==================================================
+// [8] 인터럽트 서비스 루틴 (ISR)
+//==================================================
 
-
-
-//
-//=============================
-// ADCA 인터럽트
-//=============================
+//========================
+// ADCA1 인터럽트 (현재 비활성화)
+//========================
 __interrupt void INT_ADCA1_ISR(void)
 {
     ADC_clearInterruptStatus(ADCA_BASE, ADC_INT_NUMBER1);
     Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP1);
 }
 
-
-// cla1Isr1 - CLA1 ISR 1
-//
+//========================
+// CLA 인터럽트 (CLA Task 완료 시 호출)
+//========================
+// CLA Task1/Task2 완료 시 호출되는 ISR (현재 별도 처리 없음)
+//========================
 __interrupt void cla1Isr1 ()
 {
     Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP11);
 //    asm(" ESTOP0");
 }
 
-//
-// cla1Isr1 - CLA1 ISR 2
-//
 __interrupt void cla1Isr2 ()
 {
     Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP11);
 }
 
-
+//========================
+// SCIA RX 인터럽트 (상위 마스터로부터 전류 지령 수신)
+//========================
+// Master_ID != 0 (하위 마스터)일 때만 상위로부터 4바이트 프레임 수신
+//========================
 __interrupt void sciaRxISR(void)
 {
     uint8_t rx = SCI_readCharNonBlocking(SCIA_BASE);
@@ -907,7 +872,11 @@ __interrupt void sciaRxISR(void)
     Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP9);
 }
 
-
+//========================
+// SPIC RX 인터럽트 (FPGA ADC 데이터 수신)
+//========================
+// FPGA로부터 Io, Vo, Vbat ADC 값 수신 (3 워드)
+//========================
 __interrupt void spicRxISR(void)
 {
     Io_ad   = HWREGH(SPIC_BASE + SPI_O_RXBUF);
@@ -917,6 +886,16 @@ __interrupt void spicRxISR(void)
     SPI_clearInterruptStatus(SPIC_BASE, SPI_INT_RXFF);
     Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP6);
 }
+
+//==================================================
+// [9] HMI 통신 (SCID 프로토콜)
+//==================================================
+
+//========================
+// Slave 데이터 → HMI 송신 (10ms 주기)
+//========================
+// 7바이트 패킷: STX | ID+Status | Current_H | Current_L | Temp | Checksum | ETX
+//========================
 void send_slave_data_to_hmi(void)       // Slave Module Data를 HMI로 송신
 {
     static uint8_t current_channel = 0; // 현재 송신할 채널 (0~9 배열 인덱스)
@@ -1074,9 +1053,11 @@ void send_slave_data_to_hmi(void)
 }
 #endif
 
-
-
-
+//========================
+// System Voltage → HMI 송신 (50ms 주기)
+//========================
+// 7바이트 패킷: STX | Master_ID+Rack_Ch | Voltage_H | Voltage_L | Reserved | Checksum | ETX
+//========================
 void send_system_voltage_to_hmi(void)       // System Voltage를 HMI로 송신
 {
     uint16_t voltage_scaled = 0;
@@ -1117,9 +1098,11 @@ void send_system_voltage_to_hmi(void)       // System Voltage를 HMI로 송신
     SCI_writeCharArray(SCID_BASE, system_tx_buffer, 7);
 }
 
-
-
-
+//========================
+// SCID RX 인터럽트 (HMI 패킷 수신)
+//========================
+// 10바이트 패킷 수신: STX | CMD | Vmax_H | Vmax_L | Vmin_H | Vmin_L | Icmd_H | Icmd_L | Checksum | ETX
+//========================
 uint8_t receivedByte;
 __interrupt void scidRxReadyISR(void)
 {
@@ -1174,6 +1157,11 @@ __interrupt void scidRxReadyISR(void)
     Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP8);
 }
 
+//========================
+// HMI 패킷 파싱 (제어 변수 반영)
+//========================
+// 수신된 10바이트 패킷 해석 → start_stop, operation_mode, Voh_cmd, Vol_cmd, I_out_ref 갱신
+//========================
 void modbus_parse(void)     // 패킷 해석 및 제어변수 반영
 {   // 패킷 해석
     hmi_rx_data.start_byte   = hmi_rx_buffer[0];
@@ -1197,11 +1185,14 @@ void modbus_parse(void)     // 패킷 해석 및 제어변수 반영
 
     hmi_packet_ready = 0;   // 다음 패킷 대기
 }
-// HMI 함수 정의들 끝================================================================
 
-//
-// End of file
-//
+//==================================================
+// [10] 디버그 함수 (조건부 컴파일)
+//==================================================
+
+//========================
+// 클럭 상태 디버그 (_DEBUG_CLK_STATUS_ENABLE_)
+//========================
 #if _DEBUG_CLK_STATUS_ENABLE_
 void debug_CLK_status(void)
 {
@@ -1222,6 +1213,9 @@ void debug_CLK_status(void)
 }
 #endif
 
+//========================
+// CAN 상태 디버그 (_DEBUG_CAN_STATUS_ENABLE_)
+//========================
 #if _DEBUG_CAN_STATUS_ENABLE_
 void debug_CAN_status(void)
 {
@@ -1267,9 +1261,11 @@ void debug_CAN_status(void)
     debug_total_tq             = 1 + debug_tseg1_tq + debug_tseg2_tq;
     debug_calculated_bitrate   = debug_sysclk_freq / (debug_actual_prescaler * debug_total_tq);
 }
-#endif  // _DEBUG_CAN_S_
+#endif  // _DEBUG_CAN_STATUS_ENABLE_
 
-
+//========================
+// SCI 상태 디버그 (_DEBUG_SCI_STATUS_ENABLE_)
+//========================
 #if _DEBUG_SCI_STATUS_ENABLE_
 void debug_SCI_status(void)
 {
@@ -1300,7 +1296,9 @@ void debug_SCI_status(void)
 }
 #endif // _DEBUG_SCI_STATUS_ENABLE_
 
-
+//========================
+// SPI 상태 디버그 (_DEBUG_SPI_STATUS_ENABLE_)
+//========================
 #if _DEBUG_SPI_STATUS_ENABLE_
 void debug_SPI_status(void)
 {
@@ -1325,4 +1323,8 @@ void debug_SPI_status(void)
     debug_spi_rx_hasdata  = rx_fifo_data;
     debug_spi_rx_overflow = rx_fifo_ovf;
 }
-#endif
+#endif // _DEBUG_SPI_STATUS_ENABLE_
+
+//==================================================
+// End of HABA_Ctrl.c
+//==================================================

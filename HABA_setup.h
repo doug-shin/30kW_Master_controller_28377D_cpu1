@@ -1,7 +1,7 @@
-#ifndef HABA_INIT_H
-#define HABA_INIT_H
+#ifndef HABA_SETUP_H
+#define HABA_SETUP_H
 
-#include "HABA_shared.h"
+#include "HABA_globals.h"
 
 #define ADCA1_BASE ADCA_BASE
 #define ADCA1_RESULT_BASE ADCARESULT_BASE
@@ -117,4 +117,4 @@ typedef struct {
     void initCpu1Cla1(void);
     void Master_ID_Select(void);
 
-#endif
+#endif // HABA_SETUP_H

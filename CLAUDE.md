@@ -33,10 +33,10 @@ This is a CCS (Eclipse-based IDE) project. Build commands must be executed withi
 ### Module Organization
 
 ```
-30kW_Master_controller_28377D.c    Main entry point and control loop
-├── HABA_Init.c/h                  Hardware initialization (GPIO, PWM, CAN, SCI, SPI, ADC, CLA)
-├── HABA_Ctrl.c/h                  Control algorithms, communication handlers, ISRs
-├── HABA_shared.c/h                Global variables, constants, type definitions
+HABA_main.c                        Main entry point and control loop
+├── HABA_setup.c/h                 Hardware initialization and system setup (GPIO, PWM, CAN, SCI, SPI, ADC, CLA)
+├── HABA_control.c/h               Control algorithms, communication handlers, ISRs
+├── HABA_globals.c/h               Global variables, constants, shared data definitions
 └── HABA_cla_tasks.cla             CLA assembly tasks for high-speed PI control
 ```
 
