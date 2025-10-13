@@ -100,21 +100,21 @@ typedef struct {
 
 
     // HAL 초기화 함수
-    void HABA_init(void);
-    void initGPIO_CPU1(void);
-    void initGPIO_CPU2(void);
-    void initEPWM(void);
-    void SetEPWM(const EPWMConfig *cfg);
-    void initCANA(void);
-    void initSCIA(void);
-    void initSCIB(void);
-    void initSCID_HMI(void);
-    void initSPIA(void);
-    void initSPIC(void);
-    void initSPIDAC1(void);
-    void initADCA(void);
-    void initINTERRUPT(void);
-    void initCpu1Cla1(void);
-    void Master_ID_Select(void);
+    void Init_System(void);
+    void Init_GPIO_CPU1(void);
+    void Init_GPIO_CPU2(void);
+    void Init_EPWM(void);
+    void Set_EPWM(const EPWMConfig *cfg);
+    void Init_CANA(void);
+    void Init_SCIA(void);
+    void Init_SCIB(void);
+    void Init_SCID_SCADA(void);
+    void Init_SPIA(void);
+    void Init_SPIC(void);
+    void Init_SPI_DAC1(void);
+    void Init_ADCA(void);
+    void Init_INTERRUPT(void);
+    void Init_CPU1_CLA1(void);
+    void Select_master_id(void);
 
 #endif // HABA_SETUP_H

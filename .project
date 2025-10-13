@@ -19,6 +19,26 @@
 	</natures>
 	<linkedResources>
 		<link>
+			<name>DCL_PI_L1.asm</name>
+			<type>1</type>
+			<locationURI>COM_TI_C2000WARE_INSTALL_DIR/libraries/control/DCL/c28/source/DCL_PI_L1.asm</locationURI>
+		</link>
+		<link>
+			<name>DCL_PI_L2.asm</name>
+			<type>1</type>
+			<locationURI>COM_TI_C2000WARE_INSTALL_DIR/libraries/control/DCL/c28/source/DCL_PI_L2.asm</locationURI>
+		</link>
+		<link>
+			<name>DCL_clamp_L1.asm</name>
+			<type>1</type>
+			<locationURI>COM_TI_C2000WARE_INSTALL_DIR/libraries/control/DCL/c28/source/DCL_clamp_L1.asm</locationURI>
+		</link>
+		<link>
+			<name>DCL_error.c</name>
+			<type>1</type>
+			<locationURI>COM_TI_C2000WARE_INSTALL_DIR/libraries/control/DCL/c28/source/DCL_error.c</locationURI>
+		</link>
+		<link>
 			<name>F2837xD_DefaultISR.c</name>
 			<type>1</type>
 			<locationURI>COM_TI_C2000WARE_INSTALL_DIR/device_support/f2837xd/common/source/F2837xD_DefaultISR.c</locationURI>

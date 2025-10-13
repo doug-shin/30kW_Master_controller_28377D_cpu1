@@ -41,7 +41,7 @@
  [09.01] CAN Slave 12bit → 16bit 변경
  [09.08] SCIA 기초 구현완료
  [09.09] Current_command_task 모드에 따른 동작 구현 완료
- [09.10] Run 변수 오동작 분석 완료
+ [09.10] run 변수 오동작 분석 완료
  [09.11] HMI protocol_rev2_0 구현 완료, average_task 함수 200번 평균 if 조건문 ++ 위치 버그 수정
  [09.12] PI 제어기 피드백 전압 변경, sensing_task 함수 Vo_sen, Vbat_sen 캘리브레이션
  [09.15] HMI protocol_rev2_0 코드 통합 완료
@@ -52,7 +52,7 @@
  [09.22] 전면 상태 LED 구현 완료
  [09.23] UI 데이터 전송 문제 해결
         * - 10us → SCI 데이터 전송 시간 변경 10ms / 50ms
- [09.25] PI 제어기 동작 방식 수정, Module_Sequence 동작 신호 변경(Run → Start_Stop)
+ [09.25] PI 제어기 동작 방식 수정, Module_Sequence 동작 신호 변경(run → Start_Stop)
  [09.30] Sequence_Module 변경
  [10.01] UI 개선, 1~15까지 동작 확인 완료
         * - 16~31 추가 시 while문 검증 필요
@@ -69,12 +69,29 @@
 //==================================================
 // 함수 전방 선언
 //==================================================
-void voltage_sensing_task(void);
-void pi_control_task(void);
-void current_command_task(void);
-void temperature_task(void);
-void average_task(void);
-__interrupt void INT_Init_EPWM1_ISR(void);
+// 제어 Phase 함수 선언 (HABA_control.c에서 정의)
+void Sensing_And_Trigger_PI(void);
+void Apply_PI_And_Convert_DAC(void);
+void Transmit_Current_Command(void);
+void Check_System_Safety(void);
+void Update_Monitoring_And_Sequence(void);
+__interrupt void INT_EPWM1_ISR(void);
+
+//==================================================
+// 5-Phase 제어 함수 테이블 (20kHz effective)
+//==================================================
+// Phase별 함수를 배열로 정의하여 가독성 향상
+// switch-case 없이 인덱싱으로 간결하게 호출
+//==================================================
+typedef void (*PhaseFunction)(void);
+
+static const PhaseFunction control_phase_table[5] = {
+    Sensing_And_Trigger_PI,          // Phase 0: 센싱 + PI 준비 + CLA Force
+    Apply_PI_And_Convert_DAC,        // Phase 1: PI 결과 적용 + DAC 변환
+    Transmit_Current_Command,        // Phase 2: RS485 전류 지령 전송
+    Check_System_Safety,             // Phase 3: 안전 체크 + 릴레이 제어
+    Update_Monitoring_And_Sequence   // Phase 4: 모니터링 + 시퀀스 실행
+};
 
 //==================================================
 // main() - 시스템 엔트리 포인트
@@ -85,7 +102,7 @@ void main(void)
     // 시스템 초기화
     //==================================
     Device_init();      // TI Device 초기화
-    HABA_init();        // 하드웨어 초기화 (GPIO, PWM, CAN, SCI, SPI, ADC, CLA)
+    Init_System();        // 하드웨어 초기화 (GPIO, PWM, CAN, SCI, SPI, ADC, CLA)
 
     GPIO_writePin(LED_PWR, 1);  // 전원 LED ON
 
@@ -97,24 +114,24 @@ void main(void)
         //========================
         // 1ms 주기 작업
         //========================
-        if (_1ms_flag)
+        if (flag_1ms)
         {
-            GPIO_writePin(91, 1);   // 디버그 GPIO 토글 시작
-
-            _1ms_flag = 0;
+            DEBUG_1MS_START();
+            
+            flag_1ms = 0;
 
             // CAN 슬레이브 제어 (Start/Stop에 따라 Buck Enable 제어)
             if (start_stop == START)
             {
-                // Run 조건: EMG_SW 정상 + 과전압/과전류/과온 없음 + UI_Run = 1
-                send_CANA_Message(0xA0);    // Slave ON, Buck_EN = 1
+                // run 조건: EMG_SW 정상 + 과전압/과전류/과온 없음 + UI_run = 1
+                Send_CANA_Message(0xA0);    // Slave ON, Buck_EN = 1
             }
             else
             {
-                send_CANA_Message(0x00);    // Slave OFF
+                Send_CANA_Message(0x00);    // Slave OFF
             }
 
-            GPIO_writePin(91, 0);   // 디버그 GPIO 토글 종료
+            DEBUG_1MS_END();
         }
 
         //========================
@@ -122,20 +139,20 @@ void main(void)
         //========================
         if (flag_10ms)
         {
-            GPIO_writePin(92, 1);   // 디버그 GPIO 토글 시작
-
+            DEBUG_10MS_START();
+            
             flag_10ms = false;
 
-            UI_monitoring();            // HMI 수신 데이터 처리
-            send_slave_data_to_hmi();   // Slave 모듈 데이터 → HMI 송신
+            Update_System_Status();             // 시스템 상태 업데이트 (슬레이브 모니터링 + 전류 지령)
+            Send_Slave_Data_To_SCADA();   // Slave 모듈 데이터 → SCADA 송신
 
             // CAN 슬레이브 상태 읽기 (최대 16개 채널)
             for (uint16_t mbox = 1; mbox <= 16; mbox++)
             {
-                CAN_SlaveRead(mbox);
+                Read_CAN_Slave(mbox);
             }
 
-            GPIO_writePin(92, 0);   // 디버그 GPIO 토글 종료
+            DEBUG_10MS_END();
         }
 
         //========================
@@ -145,58 +162,65 @@ void main(void)
         {
             flag_50ms = false;
 
-            send_system_voltage_to_hmi();   // 시스템 전압 → HMI 송신
-            Master_ID_Select();             // Master ID 선택 (상위/하위 구분)
+            Send_System_Voltage_To_SCADA();   // 시스템 전압 → SCADA 송신
+            Select_master_id();             // Master ID 선택 (상위/하위 구분)
         }
     }
 }
 
 //==================================================
-// INT_Init_EPWM1_ISR - 메인 제어 인터럽트 (100kHz)
+// INT_EPWM1_ISR - 메인 제어 인터럽트 (100kHz)
 //==================================================
 // 실시간 제어 루프:
-//   - FPGA ADC 데이터 수신 (Vo, Vbat, Io)
+//   - FPGA ADC 데이터 수신 (V_out, V_batt, I_out)
 //   - 5-Phase 제어 태스크 실행 (20kHz 분주)
 //   - 1ms/10ms/50ms 플래그 생성
 //   - Watchdog 서비스
 //==================================================
-#pragma CODE_SECTION(INT_Init_EPWM1_ISR, ".TI.ramfunc");
-__interrupt void INT_Init_EPWM1_ISR(void)
+#pragma CODE_SECTION(INT_EPWM1_ISR, ".TI.ramfunc");
+__interrupt void INT_EPWM1_ISR(void)
 {
-    GPIO_writePin(90, 1);   // ISR 실행 시작 (디버그 GPIO)
+    DEBUG_ISR_START();
 
     //========================
     // FPGA SPI 데이터 수신
     //========================
-    read_FPGA_data();       // Vo_ad, Vbat_ad, Io_ad 읽기
+    Read_FPGA_Data();       // V_out_raw, V_batt_raw, I_out_raw 읽기
 
-    INT_EPMW1_Flag = 1;
+    flag_epwm1_int = 1;
 
     //========================
     // 전압 센싱 누적 (5회 평균용)
     //========================
-    Vo_ad_sum   += Vo_ad;
-    Vbat_ad_sum += Vbat_ad;
+    V_out_raw_sum   += V_out_raw;
+    V_batt_raw_sum += V_batt_raw;
 
     //========================
     // PI 제어 피드백 전압 선택
     //========================
-    // sequence_step == 20 (정상 운전): Vbat 피드백
-    // 그 외 (프리차징 등): Vo 피드백
+    // sequence_step == 20 (정상 운전): V_batt 피드백
+    // 그 외 (프리차징 등): V_out 피드백
     if (sequence_step == 20)
-        Vfb = Vbat;
+        V_fb = V_batt;
     else
-        Vfb = Vo;
+        V_fb = V_out;
 
     //========================
-    // 5-Phase 제어 태스크 실행 (20kHz)
+    // 5-Phase 제어 실행 (20kHz, 파이프라이닝 구조)
     //========================
-    // Phase 0: sensing_task         - 전압/전류 센싱 및 캘리브레이션
-    // Phase 1: pi_control_task      - 소프트 스타트 + PI 제어
-    // Phase 2: current_command_task - 전류 지령 전송
-    // Phase 3: temperature_task     - 온도 측정 및 고장 체크
-    // Phase 4: average_task         - 장기 평균 및 시퀀스
-    control_task_functions[control_phase]();
+    // Phase 0: 센싱 + CLA Force → Phase 1: CLA 결과 사용 (10us 후)
+    // CPU-CLA 병렬 실행으로 성능 최적화
+    // 함수 테이블로 간결하게 구현
+    //========================
+    
+    // 안전장치: Phase 범위 체크 (0~4)
+    if (control_phase >= 5)
+        control_phase = 0;
+    
+    // Phase 함수 실행 (함수 포인터 배열 호출)
+    control_phase_table[control_phase]();
+    
+    // Phase 인덱스 증가 및 순환 (0→1→2→3→4→0)
     if (++control_phase >= 5)
         control_phase = 0;
 
@@ -205,11 +229,11 @@ __interrupt void INT_Init_EPWM1_ISR(void)
     //========================
 
     // 1ms 플래그 (100kHz / 100 = 1kHz)
-    if (++_1ms_count >= 100)
+    if (++cnt_1ms >= 100)
     {
-        _1ms_count = 0;
+        cnt_1ms = 0;
         SysCtl_serviceWatchdog();   // Watchdog 서비스
-        _1ms_flag = true;
+        flag_1ms = true;
     }
 
     // 10ms 플래그 (100kHz / 1000 = 100Hz)
@@ -232,7 +256,7 @@ __interrupt void INT_Init_EPWM1_ISR(void)
     EPWM_clearEventTriggerInterruptFlag(EPWM1_BASE);
     Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP3);
 
-    GPIO_writePin(90, 0);   // ISR 실행 종료 (디버그 GPIO)
+    DEBUG_ISR_END();
 }
 
 //==================================================

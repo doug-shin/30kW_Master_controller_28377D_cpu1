@@ -4,7 +4,7 @@
 #include "HABA_setup.h"
 #include "HABA_control.h"
 
-void HABA_init()
+void Init_System()
 {
     Interrupt_initModule();
     Interrupt_initVectorTable();
@@ -12,30 +12,30 @@ void HABA_init()
     // Device_bootCPU2(C1C2_BROM_BOOTMODE_BOOT_FROM_FLASH);
 
 
-    initGPIO_CPU1();
-    initGPIO_CPU2();
+    Init_GPIO_CPU1();
+    Init_GPIO_CPU2();
 
 
-    initCANA();
-    initSCIA();
-    initSCIB();
-    initSCID_HMI();
-    initSPIDAC1();
-    //initSPIA();
-    initSPIC();
-    initADCA();
-    initEPWM();
+    Init_CANA();
+    Init_SCIA();
+    Init_SCIB();
+    Init_SCID_SCADA();
+    Init_SPI_DAC1();
+    //Init_SPIA();
+    Init_SPIC();
+    Init_ADCA();
+    Init_EPWM();
 
-    initCpu1Cla1();
+    Init_CPU1_CLA1();
 
-    initINTERRUPT();
+    Init_INTERRUPT();
 
 
-    Master_ID_Select();
+    Select_master_id();
 
-    La_Ee = wc * Ts / (2 + wc*Ts);
-    Lb_Ee = (2 - wc * Ts) / (2 + wc * Ts);
-    if (Master_ID == 0)
+    lpf_coeff_a = wc * Ts / (2 + wc*Ts);
+    lpf_coeff_b = (2 - wc * Ts) / (2 + wc * Ts);
+    if (master_id == 0)
     {
         GPIO_writePin(RS485A_DE_GPIO, 1);   // 상위만 DE=1
         GPIO_writePin(30, 1);               // 디버깅 핀
@@ -43,7 +43,7 @@ void HABA_init()
 }
 
 
-void initEPWM(void)
+void Init_EPWM(void)
 {
     EPWMConfig epwm1_cfg = {
         .base = EPWM1_BASE,
@@ -71,11 +71,11 @@ void initEPWM(void)
         .socEventPrescale = 1
     };
 
-    SetEPWM(&epwm1_cfg);
-    SetEPWM(&epwm3_cfg);
+    Set_EPWM(&epwm1_cfg);
+    Set_EPWM(&epwm3_cfg);
 }
 
-void SetEPWM(const EPWMConfig *cfg)
+void Set_EPWM(const EPWMConfig *cfg)
 {
     EPWM_setClockPrescaler(cfg->base, EPWM_CLOCK_DIVIDER_1, EPWM_HSCLOCK_DIVIDER_1);
     EPWM_setTimeBasePeriod(cfg->base, cfg->period);
@@ -135,7 +135,7 @@ void SetEPWM(const EPWMConfig *cfg)
 
 
 
-void initCANA(void)
+void Init_CANA(void)
 {
     uint16_t i;
     CAN_initModule(CANA_BASE);
@@ -168,7 +168,7 @@ void initCANA(void)
 
 
 
-void initSCIA(void)
+void Init_SCIA(void)
 {
     // 1. SCI 소프트 리셋
     SCI_performSoftwareReset(SCIA_BASE);
@@ -195,7 +195,7 @@ void initSCIA(void)
 }
 
 
-void initSCIB(void)
+void Init_SCIB(void)
 {
     // 1. SCI 소프트 리셋
     SCI_performSoftwareReset(SCIB_BASE);
@@ -218,13 +218,13 @@ void initSCIB(void)
     SCI_enableInterrupt(SCIB_BASE, SCI_INT_RXFF);  // RX FIFO 인터럽트만 활성화
 }
 
-void initSCID_HMI(void)
+void Init_SCID_SCADA(void)
 {
     // 1. SCI 소프트 리셋
     SCI_performSoftwareReset(SCID_BASE);
 
     // 2. SCI 설정
-    SCI_setConfig(SCID_BASE, DEVICE_LSPCLK_FREQ, HMI_BAUD_RATE,
+    SCI_setConfig(SCID_BASE, DEVICE_LSPCLK_FREQ, SCADA_BAUD_RATE,
                   (SCI_CONFIG_WLEN_8 | SCI_CONFIG_STOP_ONE | SCI_CONFIG_PAR_NONE));
 
     // 3. 모듈 Enable + 채널 Reset
@@ -243,7 +243,7 @@ void initSCID_HMI(void)
     SCI_enableInterrupt(SCID_BASE, (SCI_INT_RXFF | SCI_INT_RXERR));
 }
 
-void initSPIDAC1(void)
+void Init_SPI_DAC1(void)
 {
     SPI_disableModule(SPIA_BASE);
 
@@ -266,7 +266,7 @@ void initSPIDAC1(void)
     SPI_enableModule(SPIA_BASE);
 }
 
-void initSPIA(void)
+void Init_SPIA(void)
 {
     // SPIA 모듈 비활성화
     SPI_disableModule(SPIA_BASE);
@@ -299,7 +299,7 @@ void initSPIA(void)
 
 
 
-void initSPIC(void)
+void Init_SPIC(void)
 {
     SPI_disableModule(SPIC_BASE);
 
@@ -326,7 +326,7 @@ void initSPIC(void)
 }
 
 
-void initADCA(void)
+void Init_ADCA(void)
 {
     ADC_setPrescaler(ADCA_BASE, ADC_CLK_DIV_4_0);
     ADC_setMode(ADCA_BASE, ADC_RESOLUTION_12BIT, ADC_MODE_SINGLE_ENDED);
@@ -349,24 +349,24 @@ void initADCA(void)
 }
 
 
-void initINTERRUPT(void)
+void Init_INTERRUPT(void)
 {
-    Interrupt_register(INT_EPWM1, &INT_Init_EPWM1_ISR);
+    Interrupt_register(INT_EPWM1, &INT_EPWM1_ISR);
     Interrupt_register(INT_ADCA1, &INT_ADCA1_ISR);
 
-    Interrupt_register(INT_CLA1_1, &cla1Isr1);
-    Interrupt_register(INT_CLA1_2, &cla1Isr2);
+    Interrupt_register(INT_CLA1_1, &CLA1_ISR1);
+    Interrupt_register(INT_CLA1_2, &CLA1_ISR2);
 
 
-    Interrupt_register(INT_SPIC_RX, spicRxISR);
-    Interrupt_register(INT_SCIA_RX, sciaRxISR);
-    Interrupt_register(INT_SCID_RX, &scidRxReadyISR);   // SCI-D(HMI)
+    Interrupt_register(INT_SPIC_RX, SPIC_Rx_ISR);
+    Interrupt_register(INT_SCIA_RX, SCIA_Rx_ISR);
+    Interrupt_register(INT_SCID_RX, &SCID_Rx_Ready_ISR);   // SCI-D(SCADA)
 
 
 
     Interrupt_enable(INT_SPIC_RX);
     Interrupt_enable(INT_SCIA_RX);
-    Interrupt_enable(INT_SCID_RX); // SCI-D(HMI)
+    Interrupt_enable(INT_SCID_RX); // SCI-D(SCADA)
 
     Interrupt_enable(INT_EPWM1);
     Interrupt_enable(INT_ADCA1);
@@ -376,7 +376,7 @@ void initINTERRUPT(void)
 
     Interrupt_enableInCPU(INT_EPWM1);
     Interrupt_enableInCPU(INT_SCIA_RX); // ★ 반드시 필요
-    Interrupt_enableInCPU(INT_SCID_RX); // SCI-D(HMI)
+    Interrupt_enableInCPU(INT_SCID_RX); // SCI-D(SCADA)
 
     Interrupt_enableMaster();
 }
@@ -386,7 +386,7 @@ void initINTERRUPT(void)
 //=============================
 // CLA 초기화 및 인터럽트
 //=============================
-void initCpu1Cla1(void)
+void Init_CPU1_CLA1(void)
 {
 
     #ifdef _FLASH
@@ -417,11 +417,42 @@ void initCpu1Cla1(void)
     CLA_enableIACK(CLA1_BASE);
     CLA_enableTasks(CLA1_BASE, CLA_TASKFLAG_ALL);
 
+    //==================================================
+    // DCL PI 제어기 초기화
+    //==================================================
+    // DCL_PI_L1: 이산시간 PI 제어기
+    // Ki는 연속시간 게인에 샘플링 시간을 곱한 값
+    // DCL_PI_CLA는 리셋 함수가 없으므로 수동 초기화
+    //==================================================
+    
+    // pi_charge: 충전 모드 (V_max_cmd 기준)
+    pi_charge.Kp   = Kp_set;                    // 비례 게인 = 1
+    pi_charge.Ki   = Ki_set * T_sample_set;     // 적분 게인 = 3000 * 50e-6 = 0.15
+    pi_charge.Umax = CURRENT_LIMIT;             // 출력 상한 = 80A
+    pi_charge.Umin = -2.0f;                     // 출력 하한 = -2A
+    pi_charge.Imax = CURRENT_LIMIT;             // Anti-windup 상한 = 80A (동적 업데이트)
+    pi_charge.Imin = -2.0f;                     // Anti-windup 하한 = -2A
+    // 내부 상태 수동 초기화 (DCL_PI_CLA에는 reset 함수 없음)
+    pi_charge.i10  = 0.0f;                      // 적분기 값 초기화
+    pi_charge.i6   = 1.0f;                      // Saturation flag 초기화
+    pi_charge.i11  = 0.0f;                      // Tustin integrator 초기화
+    
+    // pi_discharge: 방전 모드 (V_min_cmd 기준)
+    pi_discharge.Kp    = Kp_set;                // 비례 게인 = 1
+    pi_discharge.Ki    = Ki_set * T_sample_set; // 적분 게인 = 3000 * 50e-6 = 0.15
+    pi_discharge.Umax  = 2.0f;                  // 출력 상한 = 2A
+    pi_discharge.Umin  = -CURRENT_LIMIT;        // 출력 하한 = -80A
+    pi_discharge.Imax  = 2.0f;                  // Anti-windup 상한 = 2A
+    pi_discharge.Imin  = -CURRENT_LIMIT;        // Anti-windup 하한 = -80A (동적 업데이트)
+    // 내부 상태 수동 초기화
+    pi_discharge.i10   = 0.0f;                  // 적분기 값 초기화
+    pi_discharge.i6    = 1.0f;                  // Saturation flag 초기화
+    pi_discharge.i11   = 0.0f;                  // Tustin integrator 초기화
 }
 
 
 
-void initGPIO_CPU1(void)
+void Init_GPIO_CPU1(void)
 {
 
     GPIO_setPinConfig(GPIO_0_EPWM1A);
@@ -710,13 +741,13 @@ void initGPIO_CPU1(void)
     GPIO_setQualificationMode(SCIB_RS485_TX_GPIO, GPIO_QUAL_ASYNC);
     GPIO_setDirectionMode(SCIB_RS485_TX_GPIO, GPIO_DIR_MODE_OUT);
 
-    // SCI-D _ HMI RX (GPIO77)
+    // SCI-D _ SCADA RX (GPIO77)
     GPIO_setPinConfig(GPIO_77_SCIRXDD);
     GPIO_setDirectionMode(77, GPIO_DIR_MODE_IN);
     GPIO_setPadConfig(77, GPIO_PIN_TYPE_STD);
     GPIO_setQualificationMode(77, GPIO_QUAL_ASYNC);
 
-    // SCI-D _ HMI TX (GPIO76)
+    // SCI-D _ SCADA TX (GPIO76)
     GPIO_setPinConfig(GPIO_76_SCITXDD);
     GPIO_setDirectionMode(76, GPIO_DIR_MODE_OUT);
     GPIO_setPadConfig(76, GPIO_PIN_TYPE_STD);
@@ -814,7 +845,7 @@ void initGPIO_CPU1(void)
 }
 
 
-void initGPIO_CPU2(void)
+void Init_GPIO_CPU2(void)
 {
 
     // //

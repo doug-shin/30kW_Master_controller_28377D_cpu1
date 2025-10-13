@@ -10,9 +10,9 @@
 
 - **Master 보드 (2개)**
   - 동일 펌웨어 사용  
-  - DIP 스위치로 `Master_ID` 결정  
-    - Master_ID = 0 → 상위 마스터  
-    - Master_ID = 1 → 하위 마스터  
+  - DIP 스위치로 `master_id` 결정  
+    - master_id = 0 → 상위 마스터  
+    - master_id = 1 → 하위 마스터  
   - 통신 포트:
     - **SCID (RS232)** : SCADA ↔ 상/하위 마스터 (모드 및 지령 전달)  
     - **SCIA (RS485)** : 상위 ↔ 하위 마스터 간 전류 지령 공유  
@@ -82,7 +82,7 @@
 
 ## 4. 주요 변수 정의
 
-- **Master_ID**
+- **master_id**
   - DIP 스위치에서 읽음
   - 0 = 상위, 1 = 하위  
 
@@ -118,7 +118,7 @@
 
 Step 1. 기본 환경 정리
 
- Master_ID_Select() 함수 → 부팅 시 DIP 스위치 값 읽어서 Master_ID 설정
+ master_id_Select() 함수 → 부팅 시 DIP 스위치 값 읽어서 master_id 설정
 
  operation_mode 초기값을 MODE_STOP으로 세팅
 
@@ -138,11 +138,11 @@ operation_mode, I_cmd_total, I_cmd_ch1, I_cmd_ch2 값 갱신
 
 <br>Step 3. Master ↔ Master (RS485, SCIA) 통신
 
- 상위 마스터 (Master_ID==0)
+ 상위 마스터 (master_id==0)
 
 병렬 모드일 때 I_cmd_DAC 전송 (하위에게)
 
- 하위 마스터 (Master_ID==1)
+ 하위 마스터 (master_id==1)
 
 sciaRxISR()에서 상위 지령 수신 후 I_cmd_from_master에 저장
 
@@ -192,7 +192,7 @@ Step 6. Sequence & Fault (Task5, Task4)
 
 Step 7. 통합 동작 검증
 
- DIP 스위치 조합으로 Master_ID 테스트 (0=상위, 1=하위)
+ DIP 스위치 조합으로 master_id 테스트 (0=상위, 1=하위)
 
  SCADA에서 Independent / Parallel 모드 전송
 
@@ -202,7 +202,7 @@ Step 7. 통합 동작 검증
 
 🚀 최종 실행 흐름
 
-부팅 시: DIP 스위치 → Master_ID 결정
+부팅 시: DIP 스위치 → master_id 결정
 
 SCADA 지령 수신: operation_mode, I_cmd_xx 갱신
 

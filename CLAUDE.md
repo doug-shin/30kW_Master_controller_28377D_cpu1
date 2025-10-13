@@ -26,7 +26,30 @@ This is a CCS (Eclipse-based IDE) project. Build commands must be executed withi
 ### Key Dependencies
 - **C2000Ware**: TI's software development kit (device support, driverlib)
 - **driverlib.lib**: Pre-compiled peripheral driver library
+- **DCL (Digital Control Library)**: TI's optimized control algorithms for CLA
 - Path variables: `COM_TI_C2000WARE_INSTALL_DIR`, `C2000WARE_DLIB_ROOT`
+
+### DCL (Digital Control Library) Integration
+
+**Include Path** (CCS Project Settings → Build → C2000 Compiler → Include Options):
+```
+${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/include
+```
+
+**Required Source Files** (Add to project):
+```
+${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_PI_L1.asm
+${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_PI_L2.asm
+${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_clamp_L1.asm
+${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_error.c
+```
+
+**Alternative** (if prebuilt library exists):
+Link against `dcl_cla.lib` or similar prebuilt DCL library for F28377D.
+
+**Header Files**:
+- `DCLCLA.h`: CLA-specific DCL functions (PI, PID controllers)
+- `DCL.h`: Common DCL types and utilities
 
 ## Code Architecture
 
@@ -42,38 +65,61 @@ HABA_main.c                        Main entry point and control loop
 
 ### Real-Time Control Architecture
 
-**Primary ISR**: `INT_Init_EPWM1_ISR` @ 100kHz (EPWM1 period interrupt)
+**Primary ISR**: `INT_EPWM1_ISR` @ 100kHz (EPWM1 period interrupt)
 
-**5-Phase Task Scheduler** (20kHz effective per task):
-The control loop uses function pointers to cycle through 5 tasks at 1/5 the ISR frequency:
+**5-Phase Task Scheduler with Pipelining** (20kHz effective per task):
+The control loop uses a pipelined architecture for optimal CPU-CLA parallelism:
 
 ```c
-void (*control_task_functions[5])(void) = {
-    sensing_task,           // Phase 0: Voltage/current ADC averaging
-    pi_control_task,        // Phase 1: CLA PI controller + soft-start
-    current_command_task,   // Phase 2: Current reference processing
-    temperature_task,       // Phase 3: NTC temperature monitoring
-    average_task           // Phase 4: Long-term averaging
+// Function pointer table for clean phase execution
+static const PhaseFunction control_phase_table[5] = {
+    Sensing_And_Trigger_PI,         // Phase 0: Voltage sensing → LPF → CLA Force
+    Apply_PI_And_Convert_DAC,        // Phase 1: Use CLA results → DAC conversion
+    Transmit_Current_Command,        // Phase 2: RS485 transmission
+    Check_System_Safety,             // Phase 3: Fault detection & relay control
+    Update_Monitoring_And_Sequence   // Phase 4: Averaging & sequence control
 };
+
+// ISR execution (replaces switch-case for clarity)
+control_phase_table[control_phase]();
 ```
 
-Execution flow in ISR:
-```c
-control_task_functions[control_phase]();
-if (++control_phase >= 5) control_phase = 0;
+**Pipeline Flow**:
 ```
+Phase 0 (n-th cycle):
+  ├─ Voltage sensing & calibration
+  ├─ Soft-start ramp calculation
+  ├─ LPF filtering
+  ├─ Anti-windup limit update
+  └─ CLA Task Force (non-blocking)
+      [CLA executes in background]
+
+Phase 1 (n-th cycle, 10us later):
+  ├─ CLA results ready (I_PI_charge_out, I_PI_discharge_out)
+  ├─ Operating mode selection
+  ├─ Current limiting
+  └─ DAC output conversion
+
+Phase 2-4: Communication & Monitoring
+```
+
+**Pipeline Benefits**:
+- **Latency**: 10μs (vs 50μs without pipelining)
+- **CPU-CLA Parallelism**: CLA runs while CPU executes Phase 1-4
+- **No Blocking**: Force-only calls, no ForceAndWait
+- **Deterministic**: CLA completion guaranteed in 10μs (CLA needs only 0.1-0.2μs)
 
 ### Critical Timing Loops
 
-**1ms Loop** (`_1ms_flag`):
+**1ms Loop** (`flag_1ms`):
 - CAN bus communication with slave modules
 - Watchdog service
 - Emergency stop monitoring
 
 **10ms Loop** (`flag_10ms`):
-- HMI data reception and parsing
+- SCADA data reception and parsing
 - Slave status updates (channels 1-16)
-- System data transmission to HMI
+- System data transmission to SCADA
 
 **50ms Loop** (`flag_50ms`):
 - System voltage reporting
@@ -82,21 +128,65 @@ if (++control_phase >= 5) control_phase = 0;
 
 ### CLA (Control Law Accelerator) Integration
 
-The CLA runs **independent of CPU** for deterministic, low-latency PI control:
+The CLA runs **independent of CPU** for deterministic, low-latency PI control using **TI's DCL (Digital Control Library)**:
 
 **File**: `HABA_cla_tasks.cla`
 
 **Tasks**:
-- `Cla1Task1`: High-voltage PI controller (charging mode)
-- `Cla1Task2`: Low-voltage PI controller (discharging mode)
+- `Cla1Task1`: Charge mode PI controller (V_max_cmd reference)
+- `Cla1Task2`: Discharge mode PI controller (V_min_cmd reference)
 - Tasks 3-8: Reserved (currently unused)
 
-**CPU-CLA Shared Memory**:
-- Command: `Voh_cmd`, `Vol_cmd`, `Kp`, `Ki`, `T_sample`, `I_sat`, `I_MAX`
-- Feedback: `Vfb` (voltage), `Voh_pi_out`, `Vol_pi_out` (control outputs)
-- Variables declared in `HABA_shared.h` with `extern` linkage
+**DCL PI Controller (DCL_PI_CLA)**:
+```c
+// TI's optimized PI controller structure
+typedef struct {
+    float32_t Kp;       // Proportional gain
+    float32_t Ki;       // Integral gain (discrete: Ki_continuous * Ts)
+    float32_t i10;      // Integrator storage
+    float32_t Umax;     // Upper control saturation limit
+    float32_t Umin;     // Lower control saturation limit
+    float32_t i6;       // Saturation storage
+    float32_t i11;      // Integrator storage
+    float32_t Imax;     // Upper integrator saturation limit (Anti-windup)
+    float32_t Imin;     // Lower integrator saturation limit (Anti-windup)
+} DCL_PI_CLA;
+```
 
-**CLA Initialization**: `initCpu1Cla1()` in `HABA_Init.c`
+**Usage in CLA Tasks**:
+```c
+// Task 1: Charge mode
+I_PI_charge_out = DCL_runPI_L1(&pi_charge, V_max_cmd, V_fb);
+
+// Task 2: Discharge mode
+I_PI_discharge_out = DCL_runPI_L1(&pi_discharge, V_min_cmd, V_fb);
+```
+
+**Advantages of DCL**:
+- TI-optimized assembly code (~10-20 cycles per PI calculation)
+- Automatic Anti-windup handling
+- Standardized interface
+- Better maintainability
+
+**CPU-CLA Shared Memory**:
+- **CpuToCla1MsgRAM**: `pi_charge`, `pi_discharge` (DCL_PI_CLA structures), `V_max_cmd`, `V_min_cmd`, `V_fb`
+- **Cla1ToCpuMsgRAM**: `I_PI_charge_out`, `I_PI_discharge_out`, `cla_cnt` (debug counter)
+
+**CLA + DCL Initialization**: `Init_CPU1_CLA1()` in `HABA_setup.c`
+```c
+// Discrete-time PI (Ki = Ki_continuous * Ts)
+// Charge mode controller
+pi_charge.Kp = 1.0f;
+pi_charge.Ki = 3000.0f * 50e-6f;  // = 0.15
+pi_charge.Umax = 80.0f;
+pi_charge.Umin = -2.0f;
+pi_charge.Imax = 80.0f;  // Dynamic update in Sensing_And_Trigger_PI()
+pi_charge.Imin = -2.0f;
+// Manual reset (DCL_PI_CLA has no reset function)
+pi_charge.i10 = 0.0f;
+pi_charge.i6  = 1.0f;
+pi_charge.i11 = 0.0f;
+```
 - Memory mapping for message RAMs
 - Task trigger configuration
 - Scratchpad memory setup
@@ -107,23 +197,23 @@ The CLA runs **independent of CPU** for deterministic, low-latency PI control:
 - **TX**: Master commands to slaves (0xE0 base ID)
 - **RX**: Slave status feedback (0xF1-0xFF, mailboxes 2-16)
 - Protocol: 4-byte messages with current, temperature, status flags
-- Function: `send_CANA_Message()`, `CAN_SlaveRead()`
+- Function: `Send_CANA_Message()`, `Read_CAN_Slave()`
 
 **RS485A/B** (SCIA/B @ 5.625Mbps):
 - Current reference transmission to legacy modules
 - DE (Driver Enable) GPIO control for half-duplex
-- Functions: `send_485A_CurrentCommand()`, `send_485B_CurrentCommand()`
+- Functions: `Send_485A_Current_Command()`, `Send_485B_Current_Command()`
 
 **SPI Channels**:
 - **SPIA**: DAC80502 control (5MHz, 8-bit frames) - analog output
 - **SPIC**: FPGA communication (ADC data reception: Vo, Vbat, Io)
-- Function: `read_FPGA_data()` called every 100kHz ISR
+- Function: `Read_FPGA_Data()` called every 100kHz ISR
 
-**SCID (HMI Interface)** @ 115200 baud:
+**SCID (SCADA Interface)** @ 115200 baud:
 - Protocol: Custom 10-byte packet with STX/ETX framing
-- Commands: Run/Stop, Mode selection, Voltage/Current setpoints
+- Commands: run/Stop, Mode selection, Voltage/Current setpoints
 - Modbus-like checksum validation
-- Functions: `UI_monitoring()`, `send_slave_data_to_hmi()`, `send_system_voltage_to_hmi()`
+- Functions: `Process_SCADA_Command()`, `Send_Slave_Data_To_SCADA()`, `Send_System_Voltage_To_SCADA()`
 
 ### Operating Modes
 
@@ -164,7 +254,7 @@ OVER_TEMP:    120°C
 Performance-critical functions are placed in RAM using `#pragma CODE_SECTION`:
 
 ```c
-#pragma CODE_SECTION(INT_Init_EPWM1_ISR, ".TI.ramfunc");
+#pragma CODE_SECTION(INT_EPWM1_ISR, ".TI.ramfunc");
 #pragma CODE_SECTION(sensing_task, ".TI.ramfunc");
 #pragma CODE_SECTION(pi_control_task, ".TI.ramfunc");
 ```
@@ -176,24 +266,26 @@ This eliminates Flash wait states for 100kHz ISR execution.
 Current commands undergo **soft-start limiting** to prevent inrush:
 
 ```c
-soft_start_limit += CURRENT_LIMIT * 0.00005f;  // 20kHz ramp rate
-if (soft_start_limit > CURRENT_LIMIT) soft_start_limit = CURRENT_LIMIT;
+I_ss_ramp += CURRENT_LIMIT * 0.00005f;  // 20kHz ramp rate
+if (I_ss_ramp > CURRENT_LIMIT) I_ss_ramp = CURRENT_LIMIT;
 ```
 
 Then low-pass filtered before PI control:
 ```c
-I_cmd_filt = La_Ee * (I_cmd_ss + I_cmd_old) + Lb_Ee * I_cmd_filt;
+I_cmd_filtered = lpf_coeff_a * (I_cmd_ramped + I_cmd_prev) + lpf_coeff_b * I_cmd_filtered;
 ```
 
 Filter coefficients calculated at init: `wc=1kHz`, `Ts=50μs`
+- `lpf_coeff_a`: Forward path coefficient
+- `lpf_coeff_b`: Feedback coefficient
 
 ### Voltage Feedback Selection
 
 Feedback voltage switches based on operating sequence:
 
 ```c
-if (sequence_step == 20) Vfb = Vbat;  // Pre-charge: regulate battery side
-else Vfb = Vo;                         // Normal: regulate output side
+if (sequence_step == 20) V_fb = V_batt;  // Normal: regulate battery side
+else V_fb = V_out;                       // Pre-charge: regulate output side
 ```
 
 This prevents instability during contactor transitions.
@@ -218,7 +310,7 @@ LED_DUAL       (68) // Parallel mode
 - Pre-charge relay: Code commented out (requires restoration)
 
 **Digital Inputs**:
-Defined in `DIGITAL_REG` union (GPIO36-39) for DIP switches or discrete sensors.
+GPIO36-39 used for Master ID DIP switches (directly read via `Select_master_id()`).
 
 ### ADC Configuration
 
@@ -236,7 +328,7 @@ Vbat_sen = (fADC_voltage_Bat - 0.3058461657f) * 0.9945009708f;
 Physical hardware strapping determines if this board is "upper" or "lower" master:
 
 ```c
-void Master_ID_Select(void); // Reads GPIO pins to determine Master_ID (0 or 1)
+void Select_master_id(void); // Reads GPIO pins to determine master_id (0 or 1)
 ```
 
 Affects:
@@ -255,7 +347,7 @@ Affects:
 - DAC80502 SPI (07.10)
 - NTC temperature sensing (07.11)
 - Digital I/O (07.12)
-- HMI protocol rev 2.0 (09.11, 09.15)
+- SCADA protocol rev 2.0 (09.11, 09.15)
 - UI data transmission fixes (09.23)
 - Sequence module updates (09.30)
 - UI channels 1-15 operation (10.01)
@@ -292,14 +384,15 @@ GPIO92: 10ms task
 ### When Modifying Control Algorithms
 
 1. **Shared Variables**: Add to `HABA_shared.h` with `extern`, define in `HABA_shared.c`
-2. **CLA Access**: Variables accessed by CLA must be in message RAM (see `initCpu1Cla1()`)
+2. **CLA Access**: Variables accessed by CLA must be in message RAM (see `Init_CPU1_CLA1()`)
 3. **ISR Functions**: Use `#pragma CODE_SECTION(..., ".TI.ramfunc")` for time-critical code
-4. **Task Timing**: Respect 10μs ISR budget - offload heavy work to background loops
+4. **Naming Convention**: Project uses Pascal_Snake_Case (e.g., `Update_Voltage_Sensing`, `Send_CANA_Message`) with uppercase preserved for acronyms (CAN, SPI, ADC, GPIO, etc.) and physical quantities (V, I)
+5. **Task Timing**: Respect 10μs ISR budget - offload heavy work to background loops
 
 ### When Adding Communication Features
 
-- **CAN**: Extend mailbox configuration in `initCANA()`, update `RX_MSG_OBJ_COUNT`
-- **SCID Protocol**: Modify `HMI_PACKET` struct and `modbus_parse()` function
+- **CAN**: Extend mailbox configuration in `Init_CANA()`, update `RX_MSG_OBJ_COUNT`
+- **SCID Protocol**: Modify `HMI_PACKET` struct and `Modbus_Parse()` function
 - **Timing**: SCI transmission moved from 10μs to 10/50ms to prevent ISR overruns (09.23 fix)
 
 ### Calibration Procedure
@@ -337,9 +430,58 @@ If activating CPU2:
 
 ### Watchdog Configuration
 
-Watchdog serviced every 1ms in `INT_Init_EPWM1_ISR`:
+Watchdog serviced every 1ms in `INT_EPWM1_ISR`:
 ```c
 SysCtl_serviceWatchdog();
 ```
 
 Timeout configured in `Device_init()` (device library). Do not remove service calls without reconfiguring watchdog timeout.
+
+### Performance Optimization
+
+**GPIO Direct Register Access (10x faster than driverlib)**
+
+All GPIO operations in ISR/RAMFUNC use direct register access instead of `GPIO_writePin()`:
+
+```c
+// Fast macros defined in HABA_globals.h
+GPIO8_SET()     // Relay 8 ON  (5-10 cycles vs 50-100 cycles)
+GPIO8_CLEAR()   // Relay 8 OFF
+GPIO90_SET()    // Debug pin HIGH
+GPIO90_CLEAR()  // Debug pin LOW
+```
+
+**Performance Impact:**
+- **driverlib GPIO_writePin()**: ~50-100 cycles (~0.25-0.5μs @ 200MHz)
+- **Direct register access**: ~5-10 cycles (~0.025-0.05μs @ 200MHz)
+- **Speed improvement**: ~10x faster
+
+**Timing Debug GPIO (Conditional Compilation)**
+
+Debug GPIO toggles (GPIO 90, 91, 92) are used for oscilloscope timing measurement:
+
+- **GPIO 90**: ISR execution timing (100kHz)
+- **GPIO 91**: 1ms task timing (1kHz)
+- **GPIO 92**: 10ms task timing (100Hz)
+
+Control via `ENABLE_TIMING_DEBUG` flag in `HABA_globals.h`:
+```c
+#define ENABLE_TIMING_DEBUG     0    // 0=disabled (release), 1=enabled (debug)
+```
+
+Usage in code:
+```c
+DEBUG_ISR_START();    // Expands to GPIO90_SET() or nothing
+// ... ISR code ...
+DEBUG_ISR_END();      // Expands to GPIO90_CLEAR() or nothing
+```
+
+When **disabled** (release build):
+- Debug macros expand to empty statements
+- No overhead at all
+- Recommended for production firmware
+
+When **enabled** (debug build):
+- GPIO toggles active for timing analysis
+- Use oscilloscope to measure execution time
+- Still ~10x faster than driverlib calls

@@ -1,38 +1,47 @@
+//==================================================
+// HABA_cla_tasks.cla - CLA PI Controller Tasks (DCL)
+//==================================================
+// TI F28377D 30kW Master Controller
+// DCL (Digital Control Library) 기반 PI 제어기
+//==================================================
+
 #include "driverlib.h"
-// #include "board.h"
 #include "HABA_globals.h"
 
-
-
-__interrupt void Cla1Task1(void) // PI_Controller_high
+//--------------------------------------------------
+// CLA Task 1: PI Controller (Charge Mode)
+//--------------------------------------------------
+// 충전 모드 PI 제어기 (V_max_cmd 기준)
+// DCL_runPI_L1(): Series form PI controller
+//--------------------------------------------------
+__interrupt void Cla1Task1(void)
 {
-    Voh_Err    = Voh_cmd - Vfb;
-    Voh_p_out  = Kp * Voh_Err;
-    Voh_i_out += Ki * T_sample * Voh_Err;
-    cla_cnt++;
-
-    if      (Voh_i_out >  I_sat) Voh_i_out =  I_sat;
-    else if (Voh_i_out < -2.0f) Voh_i_out = -2.0f;
-
-    Voh_pi_out = Voh_p_out + Voh_i_out;
-
-    if      (Voh_pi_out >  I_MAX) Voh_pi_out =  I_MAX;
-    else if (Voh_pi_out < -2.0f) Voh_pi_out = -2.0f;
+    // DCL PI 제어기 실행
+    // I_PI_charge_out = DCL_runPI_L1(제어기, 목표값, 피드백)
+    I_PI_charge_out = DCL_runPI_L1(&pi_charge, V_max_cmd, V_fb);
+    
+    cla_cnt++;      // 실행 카운터 증가
+    
+    // 디버그용 변수 (옵션, 필요시 활성화)
+    // V_max_err = V_max_cmd - V_fb;
+    // V_max_P_term = pi_charge.Kp * V_max_err;
+    // V_max_I_term = pi_charge.i10;
 }
 
-__interrupt void Cla1Task2(void) // PI_Controller_low
+//--------------------------------------------------
+// CLA Task 2: PI Controller (Discharge Mode)
+//--------------------------------------------------
+// 방전 모드 PI 제어기 (V_min_cmd 기준)
+//--------------------------------------------------
+__interrupt void Cla1Task2(void)
 {
-    Vol_Err    = Vol_cmd - Vfb;
-    Vol_p_out  = Kp * Vol_Err;
-    Vol_i_out += Ki * T_sample * Vol_Err;
-
-    if      (Vol_i_out >  2.0f) Vol_i_out = 2.0f;
-    else if (Vol_i_out < -I_MAX) Vol_i_out = -I_MAX;
-
-    Vol_pi_out = Vol_p_out + Vol_i_out;
-
-    if      (Vol_pi_out >  2.0f) Vol_pi_out = 2.0f;
-    else if (Vol_pi_out < -I_MAX) Vol_pi_out = -I_MAX;
+    // DCL PI 제어기 실행
+    I_PI_discharge_out = DCL_runPI_L1(&pi_discharge, V_min_cmd, V_fb);
+    
+    // 디버그용 변수 (옵션, 필요시 활성화)
+    // V_min_err = V_min_cmd - V_fb;
+    // V_min_P_term = pi_discharge.Kp * V_min_err;
+    // V_min_I_term = pi_discharge.i10;
 }
 
 __interrupt void Cla1Task3 ( void )
