@@ -115,6 +115,6 @@ typedef struct {
     void Init_ADCA(void);
     void Init_INTERRUPT(void);
     void Init_CPU1_CLA1(void);
-    void Select_master_id(void);
+    void Read_Master_ID_From_DIP(void);
 
 #endif // HABA_SETUP_H

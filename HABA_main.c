@@ -45,8 +45,8 @@
  [09.11] HMI protocol_rev2_0 구현 완료, average_task 함수 200번 평균 if 조건문 ++ 위치 버그 수정
  [09.12] PI 제어기 피드백 전압 변경, sensing_task 함수 Vo_sen, Vbat_sen 캘리브레이션
  [09.15] HMI protocol_rev2_0 코드 통합 완료
- [09.18] 독립운전, 병렬운전 릴레이 수정
-        * - Relay8 (GPIO8): 독립운전 릴레이
+ [09.18] 개별운전, 병렬운전 릴레이 수정
+        * - Relay8 (GPIO8): 개별운전 릴레이
         * - Relay7 (GPIO9): 병렬운전 릴레이
         ※ 프리차징 Relay 소스코드 주석처리 추후 코드 복귀작업 필요(20250918)
  [09.22] 전면 상태 LED 구현 완료
@@ -143,8 +143,8 @@ void main(void)
             
             flag_10ms = false;
 
-            Update_System_Status();             // 시스템 상태 업데이트 (슬레이브 모니터링 + 전류 지령)
-            Send_Slave_Data_To_SCADA();   // Slave 모듈 데이터 → SCADA 송신
+            Apply_Current_Reference_Limit();    // 시스템 상태 업데이트 (슬레이브 모니터링 + 전류 지령)
+            Send_Slave_Status_To_SCADA();       // Slave 모듈 상태 → SCADA 송신
 
             // CAN 슬레이브 상태 읽기 (최대 16개 채널)
             for (uint16_t mbox = 1; mbox <= 16; mbox++)
@@ -163,7 +163,7 @@ void main(void)
             flag_50ms = false;
 
             Send_System_Voltage_To_SCADA();   // 시스템 전압 → SCADA 송신
-            Select_master_id();             // Master ID 선택 (상위/하위 구분)
+            Read_Master_ID_From_DIP();      // Master ID 읽기 (GPIO36~39 DIP)
         }
     }
 }
@@ -198,9 +198,9 @@ __interrupt void INT_EPWM1_ISR(void)
     //========================
     // PI 제어 피드백 전압 선택
     //========================
-    // sequence_step == 20 (정상 운전): V_batt 피드백
+    // sequence_step == SEQ_STEP_NORMAL_RUN (정상 운전): V_batt 피드백
     // 그 외 (프리차징 등): V_out 피드백
-    if (sequence_step == 20)
+    if (sequence_step == SEQ_STEP_NORMAL_RUN)
         V_fb = V_batt;
     else
         V_fb = V_out;
@@ -212,16 +212,12 @@ __interrupt void INT_EPWM1_ISR(void)
     // CPU-CLA 병렬 실행으로 성능 최적화
     // 함수 테이블로 간결하게 구현
     //========================
-    
-    // 안전장치: Phase 범위 체크 (0~4)
-    if (control_phase >= 5)
-        control_phase = 0;
-    
+
     // Phase 함수 실행 (함수 포인터 배열 호출)
     control_phase_table[control_phase]();
-    
+
     // Phase 인덱스 증가 및 순환 (0→1→2→3→4→0)
-    if (++control_phase >= 5)
+    if (++control_phase >= NUM_CONTROL_PHASES)
         control_phase = 0;
 
     //========================
@@ -229,7 +225,7 @@ __interrupt void INT_EPWM1_ISR(void)
     //========================
 
     // 1ms 플래그 (100kHz / 100 = 1kHz)
-    if (++cnt_1ms >= 100)
+    if (++cnt_1ms >= TIMING_1MS_AT_100KHZ)
     {
         cnt_1ms = 0;
         SysCtl_serviceWatchdog();   // Watchdog 서비스
@@ -237,14 +233,14 @@ __interrupt void INT_EPWM1_ISR(void)
     }
 
     // 10ms 플래그 (100kHz / 1000 = 100Hz)
-    if (++cnt_10ms >= 1000)
+    if (++cnt_10ms >= TIMING_10MS_AT_100KHZ)
     {
         cnt_10ms = 0;
         flag_10ms = true;
     }
 
     // 50ms 플래그 (100kHz / 5000 = 20Hz)
-    if (++cnt_50ms >= 5000)
+    if (++cnt_50ms >= TIMING_50MS_AT_100KHZ)
     {
         cnt_50ms = 0;
         flag_50ms = true;

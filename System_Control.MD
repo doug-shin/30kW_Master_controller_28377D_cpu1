@@ -40,7 +40,7 @@
 
 ---
 
-### 독립 운전 (Independent)
+### 개별 운전 (Independent)
 
 - **상위 마스터**
   - SCADA에서 CH1 지령 수신
@@ -89,15 +89,15 @@
 - **operation_mode**
   - SCADA에서 수신
   - MODE_PARALLEL: 병렬 운전
-  - MODE_INDEPENDENT: 독립 운전
+  - MODE_INDIVIDUAL: 개별 운전
 
 - **I_cmd_total**
   - 병렬 운전 시 총 전류 지령
 
 - **I_cmd_ch1, I_cmd_ch2**
-  - 독립 운전 시 CH1, CH2 전류 지령
+  - 개별 운전 시 CH1, CH2 전류 지령
 
-- **I_cmd_DAC**
+- **I_cmd_to_slave**
   - PI 제어 출력 (DAC 스케일 값)
 
 - **I_cmd_from_master**
@@ -140,7 +140,7 @@ operation_mode, I_cmd_total, I_cmd_ch1, I_cmd_ch2 값 갱신
 
  상위 마스터 (master_id==0)
 
-병렬 모드일 때 I_cmd_DAC 전송 (하위에게)
+병렬 모드일 때 I_cmd_to_slave 전송 (하위에게)
 
  하위 마스터 (master_id==1)
 
@@ -170,7 +170,7 @@ Step 5. 제어 루프 (20kHz Task2 – PI Control)
 
  병렬:
 
-상위 Master만 PI 제어 → I_cmd_DAC 산출
+상위 Master만 PI 제어 → I_cmd_to_slave 산출
 
 하위 Master는 PI 수행 안 함 (I_cmd_from_master만 사용)
 

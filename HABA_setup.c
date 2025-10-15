@@ -31,13 +31,13 @@ void Init_System()
     Init_INTERRUPT();
 
 
-    Select_master_id();
+    Read_Master_ID_From_DIP();
 
     lpf_coeff_a = wc * Ts / (2 + wc*Ts);
     lpf_coeff_b = (2 - wc * Ts) / (2 + wc * Ts);
     if (master_id == 0)
     {
-        GPIO_writePin(RS485A_DE_GPIO, 1);   // 상위만 DE=1
+        GPIO_writePin(SCIA_RS485_MM_DE_GPIO, 1);   // 상위만 DE=1
         GPIO_writePin(30, 1);               // 디버깅 핀
     }
 }
@@ -191,7 +191,7 @@ void Init_SCIA(void)
     SCI_enableInterrupt(SCIA_BASE, SCI_INT_RXFF); // RX FIFO 인터럽트만 활성화
 
 
-    GPIO_WritePin(RS485B_DE_GPIO, 1);
+    GPIO_WritePin(SCIB_RS485_MS_DE_GPIO, 1);
 }
 
 
@@ -358,9 +358,9 @@ void Init_INTERRUPT(void)
     Interrupt_register(INT_CLA1_2, &CLA1_ISR2);
 
 
-    Interrupt_register(INT_SPIC_RX, SPIC_Rx_ISR);
-    Interrupt_register(INT_SCIA_RX, SCIA_Rx_ISR);
-    Interrupt_register(INT_SCID_RX, &SCID_Rx_Ready_ISR);   // SCI-D(SCADA)
+    Interrupt_register(INT_SPIC_RX, SPIC_FPGA_Rx_ISR);
+    Interrupt_register(INT_SCIA_RX, SCIA_RS485_MM_Rx_ISR);
+    Interrupt_register(INT_SCID_RX, &SCID_SCADA_Rx_ISR);   // SCI-D(SCADA)
 
 
 
@@ -426,28 +426,28 @@ void Init_CPU1_CLA1(void)
     //==================================================
     
     // pi_charge: 충전 모드 (V_max_cmd 기준)
-    pi_charge.Kp   = Kp_set;                    // 비례 게인 = 1
-    pi_charge.Ki   = Ki_set * T_sample_set;     // 적분 게인 = 3000 * 50e-6 = 0.15
-    pi_charge.Umax = CURRENT_LIMIT;             // 출력 상한 = 80A
-    pi_charge.Umin = -2.0f;                     // 출력 하한 = -2A
-    pi_charge.Imax = CURRENT_LIMIT;             // Anti-windup 상한 = 80A (동적 업데이트)
-    pi_charge.Imin = -2.0f;                     // Anti-windup 하한 = -2A
+    pi_charge.Kp   = Kp_set;                        // 비례 게인 = 1
+    pi_charge.Ki   = Ki_set * T_sample_set;         // 적분 게인 = 3000 * 50e-6 = 0.15
+    pi_charge.Umax = CURRENT_LIMIT_PARALLEL;        // 출력 상한 = 960A (최대 모드 기준)
+    pi_charge.Umin = -2.0f;                         // 출력 하한 = -2A
+    pi_charge.Imax = CURRENT_LIMIT_PARALLEL;        // Anti-windup 상한 = 960A (동적 업데이트)
+    pi_charge.Imin = -2.0f;                         // Anti-windup 하한 = -2A
     // 내부 상태 수동 초기화 (DCL_PI_CLA에는 reset 함수 없음)
-    pi_charge.i10  = 0.0f;                      // 적분기 값 초기화
-    pi_charge.i6   = 1.0f;                      // Saturation flag 초기화
-    pi_charge.i11  = 0.0f;                      // Tustin integrator 초기화
-    
+    pi_charge.i10  = 0.0f;                          // 적분기 값 초기화
+    pi_charge.i6   = 1.0f;                          // Saturation flag 초기화
+    pi_charge.i11  = 0.0f;                          // Tustin integrator 초기화
+
     // pi_discharge: 방전 모드 (V_min_cmd 기준)
-    pi_discharge.Kp    = Kp_set;                // 비례 게인 = 1
-    pi_discharge.Ki    = Ki_set * T_sample_set; // 적분 게인 = 3000 * 50e-6 = 0.15
-    pi_discharge.Umax  = 2.0f;                  // 출력 상한 = 2A
-    pi_discharge.Umin  = -CURRENT_LIMIT;        // 출력 하한 = -80A
-    pi_discharge.Imax  = 2.0f;                  // Anti-windup 상한 = 2A
-    pi_discharge.Imin  = -CURRENT_LIMIT;        // Anti-windup 하한 = -80A (동적 업데이트)
+    pi_discharge.Kp    = Kp_set;                    // 비례 게인 = 1
+    pi_discharge.Ki    = Ki_set * T_sample_set;     // 적분 게인 = 3000 * 50e-6 = 0.15
+    pi_discharge.Umax  = 2.0f;                      // 출력 상한 = 2A
+    pi_discharge.Umin  = -CURRENT_LIMIT_PARALLEL;   // 출력 하한 = -960A (최대 모드 기준)
+    pi_discharge.Imax  = 2.0f;                      // Anti-windup 상한 = 2A
+    pi_discharge.Imin  = -CURRENT_LIMIT_PARALLEL;   // Anti-windup 하한 = -960A (동적 업데이트)
     // 내부 상태 수동 초기화
-    pi_discharge.i10   = 0.0f;                  // 적분기 값 초기화
-    pi_discharge.i6    = 1.0f;                  // Saturation flag 초기화
-    pi_discharge.i11   = 0.0f;                  // Tustin integrator 초기화
+    pi_discharge.i10   = 0.0f;                      // 적분기 값 초기화
+    pi_discharge.i6    = 1.0f;                      // Saturation flag 초기화
+    pi_discharge.i11   = 0.0f;                      // Tustin integrator 초기화
 }
 
 
@@ -697,49 +697,49 @@ void Init_GPIO_CPU1(void)
     GPIO_setDirectionMode(CANA_SLAVE_ID_CANTX_GPIO, GPIO_DIR_MODE_OUT);
 
     // =======================
-    // RS485-A (SCI-A)
+    // SCIA RS485 (Master-to-Master)
     // =======================
 
-    // RS485-A DE (Driver Enable) - GPIO66
-    GPIO_setPinConfig(RS485A_DE_PIN_CONFIG);
-    GPIO_setPadConfig(RS485A_DE_GPIO, GPIO_PIN_TYPE_STD);
-    GPIO_setQualificationMode(RS485A_DE_GPIO, GPIO_QUAL_SYNC);
-    GPIO_setDirectionMode(RS485A_DE_GPIO, GPIO_DIR_MODE_OUT);
+    // SCIA RS485 MM DE (Driver Enable) - GPIO66
+    GPIO_setPinConfig(SCIA_RS485_MM_DE_PIN_CONFIG);
+    GPIO_setPadConfig(SCIA_RS485_MM_DE_GPIO, GPIO_PIN_TYPE_STD);
+    GPIO_setQualificationMode(SCIA_RS485_MM_DE_GPIO, GPIO_QUAL_SYNC);
+    GPIO_setDirectionMode(SCIA_RS485_MM_DE_GPIO, GPIO_DIR_MODE_OUT);
 
-    // SCIA RX (GPIO64)
-    GPIO_setPinConfig(SCIA_RS485_RX_PIN_CONFIG);
-    GPIO_setPadConfig(SCIA_RS485_RX_GPIO, GPIO_PIN_TYPE_STD | GPIO_PIN_TYPE_PULLUP);
-    GPIO_setQualificationMode(SCIA_RS485_RX_GPIO, GPIO_QUAL_ASYNC);
-    GPIO_setDirectionMode(SCIA_RS485_RX_GPIO, GPIO_DIR_MODE_IN);
+    // SCIA RS485 MM RX (GPIO64)
+    GPIO_setPinConfig(SCIA_RS485_MM_RX_PIN_CONFIG);
+    GPIO_setPadConfig(SCIA_RS485_MM_RX_GPIO, GPIO_PIN_TYPE_STD | GPIO_PIN_TYPE_PULLUP);
+    GPIO_setQualificationMode(SCIA_RS485_MM_RX_GPIO, GPIO_QUAL_ASYNC);
+    GPIO_setDirectionMode(SCIA_RS485_MM_RX_GPIO, GPIO_DIR_MODE_IN);
 
-    // SCIA TX (GPIO65)
-    GPIO_setPinConfig(SCIA_RS485_TX_PIN_CONFIG);
-    GPIO_setPadConfig(SCIA_RS485_TX_GPIO, GPIO_PIN_TYPE_STD | GPIO_PIN_TYPE_PULLUP);
-    GPIO_setQualificationMode(SCIA_RS485_TX_GPIO, GPIO_QUAL_ASYNC);
-    GPIO_setDirectionMode(SCIA_RS485_TX_GPIO, GPIO_DIR_MODE_OUT);
+    // SCIA RS485 MM TX (GPIO65)
+    GPIO_setPinConfig(SCIA_RS485_MM_TX_PIN_CONFIG);
+    GPIO_setPadConfig(SCIA_RS485_MM_TX_GPIO, GPIO_PIN_TYPE_STD | GPIO_PIN_TYPE_PULLUP);
+    GPIO_setQualificationMode(SCIA_RS485_MM_TX_GPIO, GPIO_QUAL_ASYNC);
+    GPIO_setDirectionMode(SCIA_RS485_MM_TX_GPIO, GPIO_DIR_MODE_OUT);
 
 
     // =======================
-    // RS485-B (SCI-B)
+    // SCIB RS485 (Master-to-Slave)
     // =======================
 
-    // RS485-B DE (Driver Enable) - GPIO69
-    GPIO_setPinConfig(RS485B_DE_PIN_CONFIG);
-    GPIO_setPadConfig(RS485B_DE_GPIO, GPIO_PIN_TYPE_STD);
-    GPIO_setQualificationMode(RS485B_DE_GPIO, GPIO_QUAL_SYNC);
-    GPIO_setDirectionMode(RS485B_DE_GPIO, GPIO_DIR_MODE_OUT);
+    // SCIB RS485 MS DE (Driver Enable) - GPIO69
+    GPIO_setPinConfig(SCIB_RS485_MS_DE_PIN_CONFIG);
+    GPIO_setPadConfig(SCIB_RS485_MS_DE_GPIO, GPIO_PIN_TYPE_STD);
+    GPIO_setQualificationMode(SCIB_RS485_MS_DE_GPIO, GPIO_QUAL_SYNC);
+    GPIO_setDirectionMode(SCIB_RS485_MS_DE_GPIO, GPIO_DIR_MODE_OUT);
 
-    // SCI-B RX (GPIO71)
-    GPIO_setPinConfig(SCIB_RS485_RX_PIN_CONFIG);
-    GPIO_setPadConfig(SCIB_RS485_RX_GPIO, GPIO_PIN_TYPE_STD | GPIO_PIN_TYPE_PULLUP);
-    GPIO_setQualificationMode(SCIB_RS485_RX_GPIO, GPIO_QUAL_ASYNC);
-    GPIO_setDirectionMode(SCIB_RS485_RX_GPIO, GPIO_DIR_MODE_IN);
+    // SCIB RS485 MS RX (GPIO71)
+    GPIO_setPinConfig(SCIB_RS485_MS_RX_PIN_CONFIG);
+    GPIO_setPadConfig(SCIB_RS485_MS_RX_GPIO, GPIO_PIN_TYPE_STD | GPIO_PIN_TYPE_PULLUP);
+    GPIO_setQualificationMode(SCIB_RS485_MS_RX_GPIO, GPIO_QUAL_ASYNC);
+    GPIO_setDirectionMode(SCIB_RS485_MS_RX_GPIO, GPIO_DIR_MODE_IN);
 
-    // SCI-B TX (GPIO70)
-    GPIO_setPinConfig(SCIB_RS485_TX_PIN_CONFIG);
-    GPIO_setPadConfig(SCIB_RS485_TX_GPIO, GPIO_PIN_TYPE_STD | GPIO_PIN_TYPE_PULLUP);
-    GPIO_setQualificationMode(SCIB_RS485_TX_GPIO, GPIO_QUAL_ASYNC);
-    GPIO_setDirectionMode(SCIB_RS485_TX_GPIO, GPIO_DIR_MODE_OUT);
+    // SCIB RS485 MS TX (GPIO70)
+    GPIO_setPinConfig(SCIB_RS485_MS_TX_PIN_CONFIG);
+    GPIO_setPadConfig(SCIB_RS485_MS_TX_GPIO, GPIO_PIN_TYPE_STD | GPIO_PIN_TYPE_PULLUP);
+    GPIO_setQualificationMode(SCIB_RS485_MS_TX_GPIO, GPIO_QUAL_ASYNC);
+    GPIO_setDirectionMode(SCIB_RS485_MS_TX_GPIO, GPIO_DIR_MODE_OUT);
 
     // SCI-D _ SCADA RX (GPIO77)
     GPIO_setPinConfig(GPIO_77_SCIRXDD);

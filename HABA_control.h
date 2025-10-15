@@ -31,8 +31,8 @@ void Update_Monitoring_And_Sequence(void);      // Phase 4: 모니터링 + 시�
 
 // Execute_PI_Controller() - Execute_Current_Control()에 인라인 통합됨
 void Check_Fault(void);                         // 고장 체크 및 LED 제어
-void Update_System_Status(void);                // 시스템 상태 업데이트 (슬레이브 모니터링 + 전류 지령)
-void Execute_Sequence_Module(void);             // 시퀀스 제어 모듈 (Precharge → Run)
+void Apply_Current_Reference_Limit(void);       // 시스템 상태 업데이트 (슬레이브 모니터링 + 전류 지령)
+void Update_System_Sequence(void);              // 시퀀스 제어 모듈 (Precharge → Run)
 
 //==================================================
 // [3] CAN 통신 (슬레이브 제어)
@@ -41,7 +41,7 @@ void Execute_Sequence_Module(void);             // 시퀀스 제어 모듈 (Prec
 void Send_CANA_Message(int8_t CAN_CMD);         // CAN 메시지 송신 (Master → Slave)
 void Read_CANA_Messages(void);                  // CAN 메시지 일괄 수신 (사용 안 함)
 bool Read_CAN_Slave(uint16_t mbox);             // 개별 슬레이브 데이터 읽기
-void Detect_Active_Slaves(void);                // 슬레이브 초기화 (초기 탐색)
+void Init_Slave_Variables(void);                // 슬레이브 초기화 (초기 탐색)
 
 //==================================================
 // [4] SPI 통신 (DAC 및 FPGA)
@@ -54,22 +54,22 @@ void Read_FPGA_Data(void);                      // FPGA ADC 데이터 읽기 (SP
 // [5] RS485 통신 (전류 지령 전송)
 //==================================================
 
-void Send_485A_Current_Command(uint16_t current);   // RS485-A: 상위 → 하위 마스터
-void Send_485B_Current_Command(uint16_t current);   // RS485-B: 마스터 → 슬레이브
+void Send_RS485_MM_Current(uint16_t current);       // SCIA RS485: Master-to-Master 전류 지령
+void Send_RS485_MS_Current(uint16_t current);       // SCIB RS485: Master-to-Slave 전류 지령
 
 //==================================================
 // [6] GPIO 제어 및 유틸리티
 //==================================================
 
 // Control_Relay(), Read_Emergency_Stop_Switch() - Check_System_Safety()에 인라인 통합됨
-void Select_master_id(void);                    // Master ID 선택 (GPIO36~39 DIP)
+void Read_Master_ID_From_DIP(void);             // Master ID 읽기 (GPIO36~39 DIP)
 
 //==================================================
 // [7] SCADA 통신 (SCID 프로토콜)
 //==================================================
 
-void Modbus_Parse(void);                        // SCADA 패킷 파싱
-void Send_Slave_Data_To_SCADA(void);            // 슬레이브 데이터 → SCADA 송신
+void Parse_SCADA_Command(void);                 // SCADA 패킷 파싱
+void Send_Slave_Status_To_SCADA(void);          // 슬레이브 상태 → SCADA 송신
 void Send_System_Voltage_To_SCADA(void);        // 시스템 전압 → SCADA 송신
 
 //==================================================
@@ -79,9 +79,9 @@ void Send_System_Voltage_To_SCADA(void);        // 시스템 전압 → SCADA �
 __interrupt void INT_ADCA1_ISR(void);           // ADCA1 인터럽트 (비활성화)
 __interrupt void CLA1_ISR1(void);               // CLA Task1 완료 ISR
 __interrupt void CLA1_ISR2(void);               // CLA Task2 완료 ISR
-__interrupt void SCIA_Rx_ISR(void);             // SCIA 수신 ISR (상위 마스터 지령)
-__interrupt void SPIC_Rx_ISR(void);             // SPIC 수신 ISR (FPGA ADC 데이터)
-__interrupt void SCID_Rx_Ready_ISR(void);       // SCID 수신 ISR (SCADA 패킷)
+__interrupt void SCIA_RS485_MM_Rx_ISR(void);    // SCIA RS485 Master-to-Master 수신 ISR (상위 마스터 지령)
+__interrupt void SPIC_FPGA_Rx_ISR(void);        // SPIC FPGA 수신 ISR (FPGA ADC 데이터)
+__interrupt void SCID_SCADA_Rx_ISR(void);       // SCID SCADA 수신 ISR (SCADA 패킷)
 
 //==================================================
 // [9] 디버그 함수 (조건부 컴파일)

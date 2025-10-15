@@ -106,8 +106,8 @@ float32_t I_cmd             = 0.0f;     // 기본 전류 지령 (SCADA 수신)
 float32_t I_cmd_ramped      = 0.0f;     // 램프 제한 적용 전류
 float32_t I_cmd_PI_limited  = 0.0f;     // PI 제한 적용 전류 (DAC 출력용)
 // I_cmd_tmp - 삭제됨 (불필요, I_out_ref를 직접 사용)
-float32_t I_cmd_ch1         = 0.0f;     // CH1 전류 지령 (독립 운전)
-float32_t I_cmd_ch2         = 0.0f;     // CH2 전류 지령 (독립 운전)
+float32_t I_cmd_ch1         = 0.0f;     // CH1 전류 지령 (개별 운전)
+float32_t I_cmd_ch2         = 0.0f;     // CH2 전류 지령 (개별 운전)
 uint16_t  I_cmd_from_master = 0;        // 상위 마스터로부터 수신한 지령
 
 // 전류 센싱 (FPGA SPI)
@@ -143,7 +143,7 @@ float32_t lpf_coeff_b       = 0.0f;     // LPF 피드백 계수
 // [7] DAC 출력
 //==================================================
 
-uint16_t I_cmd_DAC          = 0;        // DAC 출력값 (0~65535)
+uint16_t I_cmd_to_slave          = 0;        // DAC 출력값 (0~65535)
 
 //==================================================
 // [8] 슬레이브 관리 (CAN 통신)
@@ -213,9 +213,7 @@ uint32_t relay_off_delay_cnt    = 0;    // 릴레이 OFF 지연 카운터
 //==================================================
 // [12] 릴레이 제어
 //==================================================
-
-uint8_t relay_7_on_off      = 0;        // Relay 7 상태 (병렬운전)
-uint8_t relay_8_on_off      = 0;        // Relay 8 상태 (독립운전)
+// Relay 상태 변수 제거됨 - Phase 3에서 GPIO 직접 제어 방식으로 변경
 
 //==================================================
 // [13] 통신 버퍼
@@ -227,8 +225,8 @@ uint16_t CANA_txData[4]     = {0x00, 0x00, 0x00, 0x00};  // CAN 송신 버퍼
 uint16_t CANA_rxDataArray[RX_MSG_OBJ_COUNT][4] = {0};    // CAN 수신 배열
 
 // SCI 통신 (RS485)
-uint8_t gSciATxBuf[4]       = {0x1B, 0, 0, 0x03};        // SCIA 송신 버퍼
-uint8_t gSciBTxBuf[4]       = {0x1B, 0, 0, 0x03};        // SCIB 송신 버퍼
+uint8_t scia_rs485_mm_tx_buf[4] = {0x1B, 0, 0, 0x03};    // SCIA RS485 Master-to-Master 송신 버퍼
+uint8_t scib_rs485_ms_tx_buf[4] = {0x1B, 0, 0, 0x03};    // SCIB RS485 Master-to-Slave 송신 버퍼
 
 //==================================================
 // [14] SCADA 인터페이스

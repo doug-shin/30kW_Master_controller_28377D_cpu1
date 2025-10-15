@@ -140,7 +140,7 @@ pi_discharge.i11 = 0.0f;
 - [ ] PI 출력값 정상 범위 (I_PI_charge_out, I_PI_discharge_out)
 - [ ] Anti-windup 동작 확인
 - [ ] 소프트스타트 동작 확인
-- [ ] 독립 운전 모드 테스트
+- [ ] 개별 운전 모드 테스트
 - [ ] 병렬 운전 모드 테스트
 
 ---

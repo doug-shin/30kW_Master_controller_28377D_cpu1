@@ -199,10 +199,11 @@ pi_charge.i11 = 0.0f;
 - Protocol: 4-byte messages with current, temperature, status flags
 - Function: `Send_CANA_Message()`, `Read_CAN_Slave()`
 
-**RS485A/B** (SCIA/B @ 5.625Mbps):
-- Current reference transmission to legacy modules
-- DE (Driver Enable) GPIO control for half-duplex
-- Functions: `Send_485A_Current_Command()`, `Send_485B_Current_Command()`
+**RS485 (SCIA/B @ 5.625Mbps)**:
+- **SCIA RS485 (Master-to-Master)**: CH1 → CH2 current command transmission
+- **SCIB RS485 (Master-to-Slave)**: Master → Slave module current commands
+- DE (Driver Enable) GPIO control for half-duplex communication
+- Functions: `Send_RS485_MM_Current()`, `Send_RS485_MS_Current()`
 
 **SPI Channels**:
 - **SPIA**: DAC80502 control (5MHz, 8-bit frames) - analog output
@@ -213,7 +214,7 @@ pi_charge.i11 = 0.0f;
 - Protocol: Custom 10-byte packet with STX/ETX framing
 - Commands: run/Stop, Mode selection, Voltage/Current setpoints
 - Modbus-like checksum validation
-- Functions: `Process_SCADA_Command()`, `Send_Slave_Data_To_SCADA()`, `Send_System_Voltage_To_SCADA()`
+- Functions: `Parse_SCADA_Command()`, `Send_Slave_Status_To_SCADA()`, `Send_System_Voltage_To_SCADA()`
 
 ### Operating Modes
 
@@ -221,7 +222,7 @@ Controlled by `operation_mode` enum:
 
 ```c
 MODE_STOP (0)        // System disabled
-MODE_INDEPENDENT (1) // CH1/CH2 operate with independent current references
+MODE_INDIVIDUAL (1) // CH1/CH2 operate with independent current references
 MODE_PARALLEL (2)    // Upper master runs PI, lower master passes through commands
 ```
 
@@ -310,7 +311,7 @@ LED_DUAL       (68) // Parallel mode
 - Pre-charge relay: Code commented out (requires restoration)
 
 **Digital Inputs**:
-GPIO36-39 used for Master ID DIP switches (directly read via `Select_master_id()`).
+GPIO36-39 used for Master ID DIP switches (directly read via `Read_Master_ID_From_DIP()`).
 
 ### ADC Configuration
 
@@ -328,7 +329,7 @@ Vbat_sen = (fADC_voltage_Bat - 0.3058461657f) * 0.9945009708f;
 Physical hardware strapping determines if this board is "upper" or "lower" master:
 
 ```c
-void Select_master_id(void); // Reads GPIO pins to determine master_id (0 or 1)
+void Read_Master_ID_From_DIP(void); // Reads GPIO pins to determine master_id (0 or 1)
 ```
 
 Affects:
@@ -392,7 +393,7 @@ GPIO92: 10ms task
 ### When Adding Communication Features
 
 - **CAN**: Extend mailbox configuration in `Init_CANA()`, update `RX_MSG_OBJ_COUNT`
-- **SCID Protocol**: Modify `HMI_PACKET` struct and `Modbus_Parse()` function
+- **SCID Protocol**: Modify `SCADA_PACKET` struct and `Parse_SCADA_Command()` function
 - **Timing**: SCI transmission moved from 10μs to 10/50ms to prevent ISR overruns (09.23 fix)
 
 ### Calibration Procedure

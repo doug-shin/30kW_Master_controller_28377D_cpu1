@@ -38,11 +38,23 @@ extern "C" {
 // SET 레지스터: 1 쓰면 HIGH, CLEAR 레지스터: 1 쓰면 LOW
 //==================================================
 
-// --- Bank A (GPIO 0-31) - Relay 제어 ---
+// --- Bank A (GPIO 0-31) - Relay 제어 (Low-level) ---
 #define GPIO8_SET()     (GpioDataRegs.GPASET.bit.GPIO8 = 1)
 #define GPIO8_CLEAR()   (GpioDataRegs.GPACLEAR.bit.GPIO8 = 1)
+#define GPIO8_READ()    ((GpioDataRegs.GPADAT.bit.GPIO8) != 0U)
+
 #define GPIO9_SET()     (GpioDataRegs.GPASET.bit.GPIO9 = 1)
 #define GPIO9_CLEAR()   (GpioDataRegs.GPACLEAR.bit.GPIO9 = 1)
+#define GPIO9_READ()    ((GpioDataRegs.GPADAT.bit.GPIO9) != 0U)
+
+// --- Relay 제어 (하드웨어 기능 중심 매크로) ---
+#define MAIN_RELAY_ON()             GPIO8_SET()      // 메인 릴레이 ON (프리차지 후 항상 ON)
+#define MAIN_RELAY_OFF()            GPIO8_CLEAR()    // 메인 릴레이 OFF
+#define IS_MAIN_RELAY_ON()          GPIO8_READ()     // 메인 릴레이 상태 읽기
+
+#define PARALLEL_LINK_ON()          GPIO9_SET()      // 병렬 연결 릴레이 ON (병렬 모드 전용)
+#define PARALLEL_LINK_OFF()         GPIO9_CLEAR()    // 병렬 연결 릴레이 OFF
+#define IS_PARALLEL_LINK_ON()       GPIO9_READ()     // 병렬 연결 릴레이 상태 읽기
 
 // --- Bank C (GPIO 64-95) - 디버그 타이밍 측정 ---
 #define GPIO90_SET()    (GpioDataRegs.GPCSET.bit.GPIO90 = 1)
@@ -74,15 +86,126 @@ extern "C" {
 //==================================================
 
 // --- 제어 상수 ---
-#define STOP                (0)
-#define START               (1)
-#define CURRENT_LIMIT       (80.0f)     // 최대 전류 제한값 (A)
-#define MODULE_COUNT        (1)         // 모듈 개수
+#define STOP                      (0)
+#define START                     (1)
+#define CURRENT_LIMIT_INDIVIDUAL  (480.0f)    // 개별 모드 최대 전류 (A)
+#define CURRENT_LIMIT_PARALLEL    (960.0f)    // 병렬 모드 최대 전류 (A)
+
+// --- 시스템 구성 상수 ---
+#define SLAVES_PER_CHANNEL        (6)         // 채널당 슬레이브 수
+#define TOTAL_CHANNELS            (2)         // 전체 채널 수 (CH1, CH2)
+#define TOTAL_SLAVES              (12)        // 전체 슬레이브 수 (6 x 2)
+#define SLAVE_MAX_CURRENT         (80.0f)     // 슬레이브 최대 전류 (A)
+
+// --- 채널/마스터 ID 정의 ---
+#define CH1_ID                    (0)         // 채널1 마스터 ID 값
+#define CH2_ID                    (1)         // 채널2 마스터 ID 값
+
+// --- 채널 판별 매크로 (master_id 비교 없이 사용) ---
+#define IS_CH1                    (master_id == CH1_ID)     // CH1 마스터인가?
+#define IS_CH2                    (master_id == CH2_ID)     // CH2 마스터인가?
+
+// 호환성 매크로
+#define MASTER1                   CH1_ID      // 상위 마스터
+#define MASTER2                   CH2_ID      // 하위 마스터
 
 // --- 보호 임계값 ---
 #define OVER_VOLTAGE        (1400)      // 과전압 보호 임계값 (V)
 #define OVER_CURRENT        (88.0f)     // 과전류 보호 임계값 (A)
 #define OVER_TEMP           (120)       // 과온도 보호 임계값 (°C)
+
+// --- 시퀀스 제어 단계 ---
+#define SEQ_STEP_IDLE               (0)     // 대기 (Precharge 준비)
+#define SEQ_STEP_PRECHARGE_DONE     (10)    // Precharge 완료, 메인 릴레이 대기 (1초)
+#define SEQ_STEP_NORMAL_RUN         (20)    // 정상 운전 (메인 릴레이 ON)
+
+// --- 타이밍 상수 (20kHz 기준) ---
+#define TIMING_1SEC_AT_20KHZ        (20000)     // 1초 = 20kHz × 20000
+#define TIMING_2SEC_AT_20KHZ        (40000)     // 2초 = 20kHz × 40000
+#define TIMING_500MS_AT_20KHZ       (10000)     // 0.5초 = 20kHz × 10000
+#define TIMING_200SAMPLES           (200)       // 200샘플 = 10ms @ 20kHz
+
+// --- 타이밍 상수 (100kHz 기준, ISR) ---
+#define TIMING_1MS_AT_100KHZ        (100)       // 1ms = 100kHz × 100
+#define TIMING_10MS_AT_100KHZ       (1000)      // 10ms = 100kHz × 1000
+#define TIMING_50MS_AT_100KHZ       (5000)      // 50ms = 100kHz × 5000
+
+// --- Phase 제어 상수 ---
+#define NUM_CONTROL_PHASES          (5)         // 제어 Phase 개수 (0~4)
+
+// --- CAN 통신 상수 ---
+#define CAN_RX_FAULT_THRESHOLD      (10000)     // CAN 수신 고장 판정 임계값
+#define CAN_MAILBOX_MIN             (2)         // CAN 메일박스 최소값
+#define CAN_MAILBOX_MAX             (32)        // CAN 메일박스 최대값
+
+// --- 데이터 변환 상수 ---
+#define DAC_MIN_VALUE               (0)         // DAC 최소값
+#define DAC_MAX_VALUE               (65535)     // DAC 최대값
+#define DAC_CENTER_VALUE            (32768)     // DAC 중앙값 (0A)
+#define CURRENT_RANGE_MAX           (100.0f)    // 전류 범위 최대값 (±100A)
+
+#define INT16_MAX_VALUE             (32767)     // int16 최대값
+#define INT16_MIN_VALUE             (-32768)    // int16 최소값
+#define UINT8_MAX_VALUE             (255)       // uint8 최대값
+
+#define VOLTAGE_TEST_INCREMENT      (500)       // 전압 테스트 증가값 (5.0V)
+#define VOLTAGE_TEST_MAX            (5000)      // 전압 테스트 최대값 (500.0V)
+
+// --- SCADA 프로토콜 상수 ---
+#define SCADA_PACKET_SIZE           (10)        // SCADA 패킷 크기 (바이트)
+#define SCADA_SLAVE_PACKET_SIZE     (7)         // 슬레이브 상태 패킷 크기
+#define SCADA_MAX_SLAVES            (15)        // SCADA 송신 최대 슬레이브 수
+
+// --- 전압 차이 임계값 (Precharge) ---
+#define PRECHARGE_VOLTAGE_DIFF_OK   (2.0f)      // Precharge 완료 판정 전압 차 (±2V)
+
+//==================================================
+// 센싱 및 캘리브레이션 상수
+//==================================================
+// 전압/전류 센싱의 2단계 변환 과정:
+//   Step 1: ADC 원시값 → 물리값 (HW 센서 특성, 고정)
+//   Step 2: 물리값 → 캘리브레이션된 값 (실측 보정, 가변)
+//==================================================
+
+// --- Step 1: 전압 ADC 원시값 → 물리 전압 변환 (공통) ---
+#define VOLTAGE_ADC_SCALE           (0.019856f)     // ADC LSB당 전압 (V/count)
+#define VOLTAGE_ADC_OFFSET          (50.573f)       // ADC 영점 오프셋 (V)
+
+// --- Step 2: 출력 전압 (V_out) 실측 캘리브레이션 ---
+#define VOUT_CALIB_OFFSET           (0.091694057f)  // 실측 오프셋 보정 (V)
+#define VOUT_CALIB_GAIN             (0.9926000888f) // 실측 게인 보정
+
+// --- Step 2: 배터리 전압 (V_batt) 실측 캘리브레이션 ---
+#define VBATT_CALIB_OFFSET          (-0.3058461657f) // 실측 오프셋 보정 (V)
+#define VBATT_CALIB_GAIN            (0.9945009708f)  // 실측 게인 보정
+
+// --- 전류 변환 상수 (CAN 슬레이브 전류) ---
+#define CURRENT_RAW_TO_NORM_SCALE   (2.0f)          // 0~1 → -1~+1 정규화 스케일
+#define CURRENT_RAW_TO_NORM_OFFSET  (1.0f)          // 정규화 오프셋
+#define CURRENT_NORM_TO_AMP_SCALE   (100.0f)        // 정규화 → A 변환 (±100A)
+
+// --- DAC 변환 상수 (슬레이브 전류 지령 → DAC 코드) ---
+#define SLAVE_CURRENT_TO_DAC_SCALE  (327.68f)       // = 32768 / 100 (±100A → 0~65535)
+#define SLAVE_CURRENT_TO_DAC_OFFSET (32768.0f)      // DAC 중앙값 (0A 기준)
+
+// --- 소프트스타트 램프 상수 ---
+#define SOFTSTART_RAMP_COEFF        (0.00005f)      // 20kHz 기준 램프 계수
+// 램프율 계산: I_ss_ramp += current_limit * SOFTSTART_RAMP_COEFF
+//   개별 모드: 480A * 0.00005 * 20000 = 480A/1s → 9.6초 도달
+//   병렬 모드: 960A * 0.00005 * 20000 = 960A/1s → 19.2초 도달
+
+// --- 평균 계산 계수 ---
+#define AVG_5_SAMPLES_COEFF         (0.2f)          // = 1/5 (5회 평균, Phase 0)
+#define AVG_200_SAMPLES_COEFF       (0.005f)        // = 1/200 (10ms @ 20kHz, Phase 4)
+
+//==================================================
+// 릴레이 상태 상수
+//==================================================
+
+// --- 릴레이 제어 (GPIO 직접 제어 방식) ---
+// 호환성 매크로 (하드웨어 기능 매크로 사용 권장)
+#define IS_RELAY_INDIVIDUAL_ON()    IS_MAIN_RELAY_ON()          // → IS_MAIN_RELAY_ON() 사용 권장
+#define IS_RELAY_PARALLEL_ON()      IS_PARALLEL_LINK_ON()       // → IS_PARALLEL_LINK_ON() 사용 권장
 
 // --- PI 제어 파라미터 ---
 #define Kp_set              1           // 비례 게인
@@ -119,21 +242,21 @@ extern "C" {
 #define CANA_SLAVE_ID_CANTX_GPIO        4
 #define CANA_SLAVE_ID_CANTX_PIN_CONFIG  GPIO_4_CANTXA
 
-// --- RS485-A (SCIA: 마스터 간 통신) ---
-#define SCIA_RS485_RX_GPIO              64
-#define SCIA_RS485_RX_PIN_CONFIG        GPIO_64_SCIRXDA
-#define SCIA_RS485_TX_GPIO              65
-#define SCIA_RS485_TX_PIN_CONFIG        GPIO_65_SCITXDA
-#define RS485A_DE_GPIO                  66      // Driver Enable
-#define RS485A_DE_PIN_CONFIG            GPIO_66_GPIO66
+// --- SCIA RS485 (Master-to-Master 통신) ---
+#define SCIA_RS485_MM_RX_GPIO           64
+#define SCIA_RS485_MM_RX_PIN_CONFIG     GPIO_64_SCIRXDA
+#define SCIA_RS485_MM_TX_GPIO           65
+#define SCIA_RS485_MM_TX_PIN_CONFIG     GPIO_65_SCITXDA
+#define SCIA_RS485_MM_DE_GPIO           66      // Driver Enable
+#define SCIA_RS485_MM_DE_PIN_CONFIG     GPIO_66_GPIO66
 
-// --- RS485-B (SCIB: 마스터→슬레이브 통신) ---
-#define SCIB_RS485_RX_GPIO              71
-#define SCIB_RS485_RX_PIN_CONFIG        GPIO_71_SCIRXDB
-#define SCIB_RS485_TX_GPIO              70
-#define SCIB_RS485_TX_PIN_CONFIG        GPIO_70_SCITXDB
-#define RS485B_DE_GPIO                  69      // Driver Enable
-#define RS485B_DE_PIN_CONFIG            GPIO_69_GPIO69
+// --- SCIB RS485 (Master-to-Slave 통신) ---
+#define SCIB_RS485_MS_RX_GPIO           71
+#define SCIB_RS485_MS_RX_PIN_CONFIG     GPIO_71_SCIRXDB
+#define SCIB_RS485_MS_TX_GPIO           70
+#define SCIB_RS485_MS_TX_PIN_CONFIG     GPIO_70_SCITXDB
+#define SCIB_RS485_MS_DE_GPIO           69      // Driver Enable
+#define SCIB_RS485_MS_DE_PIN_CONFIG     GPIO_69_GPIO69
 
 // --- SPI-A (DAC80502) ---
 #define GPIO_PIN_SPIA_PICO              16
@@ -176,7 +299,7 @@ extern "C" {
 #define LED_CHARGE                      47      // F_LED5 충전
 #define LED_DISCHARGE                   42      // F_LED4 방전
 #define LED_FAULT                       43      // F_LED3 고장
-#define LED_SINGLE                      67      // F_LED2 독립운전
+#define LED_SINGLE                      67      // F_LED2 개별운전
 #define LED_DUAL                        68      // F_LED1 병렬운전
 
 //==================================================
@@ -186,7 +309,7 @@ extern "C" {
 // --- 운전 모드 ---
 typedef enum {
     MODE_STOP        = 0,   // 정지
-    MODE_INDEPENDENT = 1,   // 독립 운전 (CH1, CH2 각각 독립 제어)
+    MODE_INDIVIDUAL  = 1,   // 개별 운전 (CH1, CH2 각각 독립 제어)
     MODE_PARALLEL    = 2,   // 병렬 운전 (상위 마스터만 PI, 하위는 전달만)
     MODE_RESERVED    = 3    // 예약 (미사용)
 } OperationMode_t;
@@ -362,8 +485,8 @@ extern float32_t I_cmd;                     // 기본 전류 지령 (SCADA 수�
 extern float32_t I_cmd_ramped;              // 램프 제한 적용 전류
 extern float32_t I_cmd_PI_limited;          // PI 제한 적용 전류 (DAC 출력용)
 // I_cmd_tmp - 삭제됨 (불필요, I_out_ref를 직접 사용)
-extern float32_t I_cmd_ch1;                 // CH1 전류 지령 (독립 운전)
-extern float32_t I_cmd_ch2;                 // CH2 전류 지령 (독립 운전)
+extern float32_t I_cmd_ch1;                 // CH1 전류 지령 (개별 운전)
+extern float32_t I_cmd_ch2;                 // CH2 전류 지령 (개별 운전)
 extern uint16_t  I_cmd_from_master;         // 상위 마스터로부터 수신한 지령
 
 // 전류 센싱 (FPGA SPI)
@@ -399,7 +522,7 @@ extern float32_t lpf_coeff_b;               // LPF 피드백 계수
 // [7] DAC 출력
 //--------------------------------------------------
 
-extern uint16_t I_cmd_DAC;                  // DAC 출력값 (0~65535)
+extern uint16_t I_cmd_to_slave;                  // DAC 출력값 (0~65535)
 
 //--------------------------------------------------
 // [8] 슬레이브 관리 (CAN 통신)
@@ -442,9 +565,8 @@ extern uint32_t relay_off_delay_cnt;        // 릴레이 OFF 지연 카운터
 //--------------------------------------------------
 // [12] 릴레이 제어
 //--------------------------------------------------
-
-extern uint8_t relay_7_on_off;              // Relay 7 상태 (병렬운전)
-extern uint8_t relay_8_on_off;              // Relay 8 상태 (독립운전)
+// Relay 상태 변수 제거됨 - Phase 3에서 GPIO 직접 제어 방식으로 변경
+// 상태 확인이 필요한 경우 IS_RELAY_INDIVIDUAL_ON(), IS_RELAY_PARALLEL_ON() 매크로 사용
 
 //--------------------------------------------------
 // [13] 통신 버퍼
@@ -456,8 +578,8 @@ extern uint16_t CANA_txData[4];             // CAN 송신 버퍼
 extern uint16_t CANA_rxDataArray[RX_MSG_OBJ_COUNT][4];  // CAN 수신 배열
 
 // SCI 통신 (RS485)
-extern uint8_t gSciATxBuf[4];               // SCIA 송신 버퍼
-extern uint8_t gSciBTxBuf[4];               // SCIB 송신 버퍼
+extern uint8_t scia_rs485_mm_tx_buf[4];     // SCIA RS485 Master-to-Master 송신 버퍼
+extern uint8_t scib_rs485_ms_tx_buf[4];     // SCIB RS485 Master-to-Slave 송신 버퍼
 
 //--------------------------------------------------
 // [14] SCADA 인터페이스
