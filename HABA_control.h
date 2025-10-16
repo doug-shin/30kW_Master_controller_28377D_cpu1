@@ -68,7 +68,7 @@ void Read_Master_ID_From_DIP(void);             // Master ID 읽기 (GPIO36~39 D
 // [7] SCADA 통신 (SCID 프로토콜)
 //==================================================
 
-void Parse_SCADA_Command(void);                 // SCADA 패킷 파싱
+void Parse_SCADA_Command(void);                 // SCADA 패킷 파싱 (CRC-32)
 void Send_Slave_Status_To_SCADA(void);          // 슬레이브 상태 → SCADA 송신
 void Send_System_Voltage_To_SCADA(void);        // 시스템 전압 → SCADA 송신
 

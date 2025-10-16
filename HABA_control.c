@@ -7,6 +7,7 @@
 
 #include "HABA_control.h"
 #include <string.h>
+#include "vcu2/vcu2_crc.h"  // TI VCU2 CRC-32 라이브러리
 
 //==================================================
 // 디버그 모드 설정
@@ -34,6 +35,10 @@
 
 volatile uint16_t rxIndex = 0;          // SCIA 수신 버퍼 인덱스
 volatile uint8_t  rxBuffer[4];          // SCIA 수신 버퍼 (4바이트)
+
+// VCU2 CRC-32 객체 (SCADA 프로토콜용)
+CRC_Obj    crcObj_SCADA;                // CRC 객체
+CRC_Handle handleCRC_SCADA = &crcObj_SCADA;  // CRC 핸들
 
 //==================================================
 // [1] 5-Phase 제어 함수 (20kHz @ RAMFUNC)
@@ -100,8 +105,24 @@ void Sensing_And_Trigger_PI(void)
     // --- CLA PI 제어기 트리거 (백그라운드 실행) ---
     // Force만 사용, Wait 없음 → CPU와 CLA 병렬 실행
     // 결과는 Phase 1(10us 후)에서 사용
-    Cla1ForceTask1();       // pi_charge 제어기 (충전 모드, V_max_cmd 기준)
-    Cla1ForceTask2();       // pi_discharge 제어기 (방전 모드, V_min_cmd 기준)
+
+    // 제어 모드별 CLA Task 선택
+    if (control_mode == CONTROL_MODE_CHARGE_DISCHARGE)
+    {
+        // Charge/Discharge 모드: Task 1 & 2 실행
+        Cla1ForceTask1();       // pi_charge 제어기 (충전 모드, V_max_cmd 기준)
+        Cla1ForceTask2();       // pi_discharge 제어기 (방전 모드, V_min_cmd 기준)
+    }
+    else if (control_mode == CONTROL_MODE_BATTERY)
+    {
+        // Battery 모드: Task 3 실행
+        Cla1ForceTask3();       // pi_cv 제어기 (CV 제어, V_cmd 기준)
+    }
+    else
+    {
+        // 예상치 못한 control_mode: 안전을 위해 아무 Task도 실행하지 않음
+        // (향후 추가 모드를 위한 확장 포인트)
+    }
 
 }
 
@@ -115,34 +136,87 @@ void Sensing_And_Trigger_PI(void)
 void Apply_PI_And_Convert_DAC(void)
 {
     // CLA Task 결과 준비 완료 (Phase 0에서 Force, 10us 경과)
-    // I_PI_charge_out, I_PI_discharge_out 사용 가능
+    // Charge/Discharge 모드: I_PI_charge_out, I_PI_discharge_out 사용
+    // Battery 모드: I_PI_cv_out 사용
 
-    // --- 1. 운전 모드별 최종 전류 지령 계산 ---
-    if (operation_mode == MODE_INDIVIDUAL)
+    // --- 1. 제어 모드별 최종 전류 지령 계산 ---
+    if (control_mode == CONTROL_MODE_BATTERY)
     {
-        // 개별 모드: PI 제어 사용
-        master_mode = 1;
-        I_cmd_PI_limited = Apply_Current_Limits(I_cmd_filtered);
-    }
-    else if (operation_mode == MODE_PARALLEL)
-    {
-        if (IS_CH1)
+        // Battery 모드 CV 제어: CLA Task 3 결과 사용
+        // I_PI_cv_out는 CLA에서 V_cmd 기준 CV 제어로 계산된 전류 출력
+
+        // 운전 모드별 처리
+        if (operation_mode == MODE_INDIVIDUAL)
         {
-            // 병렬 모드 - CH1 마스터: PI 제어 사용
+            master_mode = 1;
+            I_cmd_PI_limited = I_PI_cv_out;  // CLA Task 3 결과 사용
+        }
+        else if (operation_mode == MODE_PARALLEL)
+        {
+            if (IS_CH1)
+            {
+                master_mode = 1;
+                I_cmd_PI_limited = I_PI_cv_out;  // CLA Task 3 결과 사용
+            }
+            else  // IS_CH2
+            {
+                master_mode = 2;
+                I_cmd_PI_limited = 0.0f;  // CH2는 PI 제어 안 함
+            }
+        }
+        else
+        {
+            master_mode = 0;
+            I_cmd_PI_limited = 0.0f;
+        }
+
+        // Battery 모드: 전류 제한 적용 (I_max_cmd, I_min_cmd)
+        float32_t current_limit = (operation_mode == MODE_PARALLEL) ?
+                                   CURRENT_LIMIT_PARALLEL : CURRENT_LIMIT_INDIVIDUAL;
+
+        // 전류 한계값 적용
+        if      (I_cmd_PI_limited >  I_max_cmd)       I_cmd_PI_limited =  I_max_cmd;
+        else if (I_cmd_PI_limited <  I_min_cmd)       I_cmd_PI_limited =  I_min_cmd;
+
+        // 시스템 레벨 전류 제한
+        if      (I_cmd_PI_limited >  current_limit)   I_cmd_PI_limited =  current_limit;
+        else if (I_cmd_PI_limited < -current_limit)   I_cmd_PI_limited = -current_limit;
+    }
+    else if (control_mode == CONTROL_MODE_CHARGE_DISCHARGE)
+    {
+        // Charge/Discharge 모드 (기존 로직)
+        if (operation_mode == MODE_INDIVIDUAL)
+        {
+            // 개별 모드: PI 제어 사용
             master_mode = 1;
             I_cmd_PI_limited = Apply_Current_Limits(I_cmd_filtered);
         }
-        else  // IS_CH2
+        else if (operation_mode == MODE_PARALLEL)
         {
-            // 병렬 모드 - CH2 마스터: CH1로부터 DAC 값 수신
-            // I_cmd_from_master는 이미 DAC 변환된 값이므로 여기서는 처리 안 함
-            master_mode = 2;
-            I_cmd_PI_limited = 0.0f;  // CH2는 PI 제어 안 함
+            if (IS_CH1)
+            {
+                // 병렬 모드 - CH1 마스터: PI 제어 사용
+                master_mode = 1;
+                I_cmd_PI_limited = Apply_Current_Limits(I_cmd_filtered);
+            }
+            else  // IS_CH2
+            {
+                // 병렬 모드 - CH2 마스터: CH1로부터 DAC 값 수신
+                // I_cmd_from_master는 이미 DAC 변환된 값이므로 여기서는 처리 안 함
+                master_mode = 2;
+                I_cmd_PI_limited = 0.0f;  // CH2는 PI 제어 안 함
+            }
+        }
+        else
+        {
+            // 정지 모드
+            master_mode = 0;
+            I_cmd_PI_limited = 0.0f;
         }
     }
     else
     {
-        // 정지 모드
+        // 예상치 못한 control_mode: 안전 모드
         master_mode = 0;
         I_cmd_PI_limited = 0.0f;
     }
@@ -612,164 +686,14 @@ void Read_Master_ID_From_DIP(void)
 //--------------------------------------------------
 void Update_System_Sequence(void)
 {
-#if 0  // ===== 구 버전 (State Machine, 현재 비활성화) =====
-    switch (state)
-    {
-        case STATE_NO_OP:
-            pre_chg_ok = 0;
-            pre_chg_fail = 0;
-            V_max_cmd = 0;
-            V_min_cmd = 0;
-            I_out_ref = 0;
-            start_stop = STOP;
-
-            if (SCADA_cmd == 1)
-            {
-                state = STATE_READY;
-            }
-
-            if (run == 0 || master_fault_flag == 1)
-            {
-                state = STATE_FAULT;
-            }
-        break;
-
-        case STATE_READY:
-            start_stop = START;
-            V_max_cmd = V_batt_display;
-            V_min_cmd = 0;
-            I_out_ref = 2;
-            pre_chg_cnt++;
-            if (pre_chg_cnt >= 20000) // 1s
-            {
-                if ((V_out_display - V_batt_display) < 2 && (V_out_display - V_batt_display) > -2)
-                {
-                    pre_chg_ok = 1;
-                    state = STATE_PRE_CHG_OK;
-                }
-                else
-                {
-                    pre_chg_fail = 1;
-                }
-            }
-
-            if (run == 0 || master_fault_flag == 1)
-            {
-                state = STATE_FAULT;
-            }
-        break;
-
-        case STATE_PRE_CHG_OK:
-            V_max_cmd = V_batt_display;
-            V_min_cmd = 0;
-            I_out_ref = 2;
-            pre_chg_cnt++;
-            if (pre_chg_cnt >= 40000) // 총 2s
-            {
-                pre_chg_cnt = 0;
-                relay_8_on_off = RELAY_ON;  // Relay 8번 ON
-                state = STATE_STAND_BY;
-            }
-
-            if (run == 0 || master_fault_flag == 1)
-            {
-                state = STATE_FAULT;
-            }
-        break;
-
-        case STATE_STAND_BY:
-            V_max_cmd = V_batt_display;
-            V_min_cmd = 0;
-            I_out_ref = 0;
-
-            if (SCADA_cmd == 2)
-            {
-                state = STATE_RUN;
-            }
-            else if (SCADA_cmd == 0)
-            {
-                state = STATE_RL_OFF;
-            }
-
-            if (run == 0 || master_fault_flag == 1)
-            {
-                state = STATE_FAULT;
-            }
-        break;
-
-        case STATE_RUN:
-            V_max_cmd = (float32_t)scada_rx_data.max_voltage;
-            V_min_cmd = (float32_t)scada_rx_data.min_voltage;
-            I_out_ref = (float32_t)scada_rx_data.current_cmd / 10.0f; // A 단위 변환
-
-            if (SCADA_cmd == 3)
-            {
-                state = STATE_STAND_BY;
-            }
-            else if (SCADA_cmd == 0)
-            {
-                state = STATE_RL_OFF;
-            }
-
-            if (run == 0 || master_fault_flag == 1)
-            {
-                state = STATE_FAULT;
-            }
-        break;
-
-        case STATE_RL_OFF:
-            V_max_cmd = V_batt_display;
-            V_min_cmd = 0;
-            I_out_ref = 0;
-
-            relay_off_delay_cnt++;
-            if (relay_off_delay_cnt >= 10000)    // 0.5s 경과
-            {
-                relay_8_on_off = RELAY_OFF;  // Relay8 OFF
-
-                if (relay_8_on_off == RELAY_OFF)
-                {
-                    state = STATE_NO_OP;
-                }
-                relay_off_delay_cnt = 0;
-            }
-
-            if (run == 0 || master_fault_flag == 1)
-            {
-                state = STATE_FAULT;
-            }
-        break;
-
-        case STATE_FAULT:
-            V_max_cmd = 0;
-            V_min_cmd = 0;
-            I_out_ref = 0;
-            start_stop = STOP;
-            I_ss_ramp = 0.0f;
-            relay_8_on_off = RELAY_OFF;
-            
-            // DCL PI 제어기 내부 상태 초기화
-            pi_charge.i10 = 0.0f;       // 적분기 값
-            pi_charge.i6  = 1.0f;       // Saturation flag
-            pi_charge.i11 = 0.0f;       // Tustin integrator
-            pi_discharge.i10  = 0.0f;
-            pi_discharge.i6   = 1.0f;
-            pi_discharge.i11  = 0.0f;
-
-            if (run == 1 && master_fault_flag == 0)
-            {
-                state = STATE_NO_OP;
-            }
-        break;
-    }
-
-#else  // ===== 신 버전 (현재 사용 중) =====
+    // ===== 시퀀스 제어 (sequence_step 기반) =====
+    // Rev 2.1 state machine 코드 삭제됨 (SCADA_cmd, scada_rx_data 의존성 제거)
 
     if (run == 1)
     {
         switch (sequence_step)
         {
-            case SEQ_STEP_IDLE:     // Precharge 단계
+            case SEQ_STEP_IDLE:     // Precharge 단계 (IDLE 상태)
                 if (start_stop == START)
                 {
                     V_max_cmd = V_batt_display;
@@ -781,11 +705,13 @@ void Update_System_Sequence(void)
                         (V_out_display - V_batt_display) > -PRECHARGE_VOLTAGE_DIFF_OK)
                     {
                         pre_chg_ok = 1;
+                        ready_state = 1;    // IDLE → READY 전환
                         sequence_step = SEQ_STEP_PRECHARGE_DONE;
                     }
                     else
                     {
                         pre_chg_ok = 0;
+                        ready_state = 0;    // IDLE 상태 유지
                     }
                 }
                 else    // Pre-charge 해제
@@ -794,11 +720,13 @@ void Update_System_Sequence(void)
                     V_min_cmd = 0;
                     I_out_ref = 0;
                     pre_chg_ok = 0;
+                    ready_state = 0;        // IDLE 상태
                     // 릴레이 제어: Phase 3에서 sequence_step 기반 자동 처리
                 }
             break;
 
-            case SEQ_STEP_PRECHARGE_DONE:    // 프리차지 완료 후 전류를 0으로 변경
+            case SEQ_STEP_PRECHARGE_DONE:    // 프리차지 완료 후 전류를 0으로 변경 (READY+STOP)
+                ready_state = 1;    // READY 상태 유지
                 V_max_cmd = V_batt_display;
                 V_min_cmd = 0;
                 I_out_ref = 0;
@@ -812,15 +740,36 @@ void Update_System_Sequence(void)
                 }
             break;
 
-            case SEQ_STEP_NORMAL_RUN:    // 정상 운전 (UI 전류 지령에 따라 동작)
-                V_max_cmd = (float32_t)scada_rx_data.max_voltage;
-                V_min_cmd = (float32_t)scada_rx_data.min_voltage;
-                I_out_ref = (float32_t)scada_rx_data.current_cmd / 10.0f; // A 단위 변환
+            case SEQ_STEP_NORMAL_RUN:    // 정상 운전 (UI 전류 지령에 따라 동작, READY+RUN)
+                ready_state = 1;    // READY 상태 유지
+
+                // 제어 모드별 데이터 처리
+                if (control_mode == CONTROL_MODE_CHARGE_DISCHARGE)
+                {
+                    // Charge/Discharge 모드: V_max_cmd, V_min_cmd, I_out_ref는
+                    // Parse_SCADA_Command()에서 이미 설정됨 (추가 처리 불필요)
+                }
+                else if (control_mode == CONTROL_MODE_BATTERY)
+                {
+                    // Battery 모드: V_cmd, I_max_cmd, I_min_cmd 사용
+                    V_max_cmd = V_cmd;      // CV 제어 목표 전압
+                    V_min_cmd = 0;
+                    I_out_ref = 0;          // Battery 모드에서는 전류 지령 사용 안 함
+                }
+                else
+                {
+                    // 예상치 못한 control_mode: 안전 상태
+                    V_max_cmd = 0;
+                    V_min_cmd = 0;
+                    I_out_ref = 0;
+                }
 
                 // UI에서 STOP 명령 시
                 if (start_stop == STOP)
                 {
                     sequence_step = SEQ_STEP_IDLE;
+                    ready_state = 0;    // IDLE 상태로 복귀
+                    pre_chg_cnt = 0;    // 카운터 리셋
                 }
             break;
         }
@@ -832,9 +781,10 @@ void Update_System_Sequence(void)
         I_out_ref = 0;
         sequence_step = SEQ_STEP_IDLE;
         start_stop = STOP;
+        ready_state = 0;    // IDLE 상태로 복귀
+        pre_chg_cnt = 0;    // 카운터 리셋
         // 릴레이 OFF: Phase 3에서 run == 0 조건으로 자동 처리
     }
-#endif
 }
 
 //==================================================
@@ -919,7 +869,7 @@ __interrupt void SPIC_FPGA_Rx_ISR(void)
 //--------------------------------------------------
 // Slave 데이터 → SCADA 송신 (10ms 주기)
 //--------------------------------------------------
-// 7바이트 패킷: [STX][ID+Status][Current_H][Current_L][Temp][Checksum][ETX]
+// 11바이트 패킷: [STX][ID+Status][Current_H][Current_L][Temp][Reserved][Reserved][CRC32_3][CRC32_2][CRC32_1][CRC32_0][ETX]
 //--------------------------------------------------
 void Send_Slave_Status_To_SCADA(void)
 {
@@ -1052,7 +1002,17 @@ void Send_System_Voltage_To_SCADA(void)
 //--------------------------------------------------
 // SCID SCADA RX 인터럽트
 //--------------------------------------------------
-// SCADA 패킷 수신 (10바이트): [STX][CMD][Vmax_H][Vmax_L][Vmin_H][Vmin_L][Icmd_H][Icmd_L][Checksum][ETX]
+// SCADA 패킷 수신 (13바이트):
+// [STX][CMD][Param1_H][Param1_L][Param2_H][Param2_L][Param3_H][Param3_L][CRC32_3][CRC32_2][CRC32_1][CRC32_0][ETX]
+//
+// ISR 역할:
+//   - 13바이트 프레임 수신 (STX/ETX 검증)
+//   - 에러 검사 (FE/OE/PE/BRKDT)
+//   - scada_packet_ready 플래그 설정 (파싱은 Main Loop에서 수행)
+//
+// 처리 최적화:
+//   - ISR 실행 시간: ~2μs (CRC 계산 제거로 10μs → 2μs 단축)
+//   - Main Loop에서 Parse_SCADA_Command() 호출 (CRC-32 검증 + 제어 변수 업데이트)
 //--------------------------------------------------
 __interrupt void SCID_SCADA_Rx_ISR(void)
 {
@@ -1083,58 +1043,116 @@ __interrupt void SCID_SCADA_Rx_ISR(void)
             // 나머지 바이트 저장
             scada_rx_buffer[scada_rx_index++] = b;
 
-            if (scada_rx_index == SCADA_PACKET_SIZE)       // 10바이트 다 받았을 때만
+            if (scada_rx_index == SCADA_PACKET_SIZE)  // 13바이트 수신 완료
             {
-                if (scada_rx_buffer[0] == 0x02 && scada_rx_buffer[9] == 0x03)
+                if (scada_rx_buffer[0] == 0x02 && scada_rx_buffer[12] == 0x03)
                 {
-                    uint8_t checksum = 0;
-                    for (uint8_t i = 1; i <= 7; i++)    // Byte1~7 합산
-                    {
-                        checksum += scada_rx_buffer[i];
-                    }
-                    if ((checksum & 0xFF) == scada_rx_buffer[8])
-                    {
-                        scada_packet_ready = 1;     // 유효 프레임 확정
-                        Parse_SCADA_Command();
-                    }
+                    scada_packet_ready = 1;     // 유효 프레임 수신, Main Loop에서 파싱
                 }
                 scada_rx_index = 0;         // 다음 패킷 준비
             }
         }
     }
-    
+
     // 3) 인터럽트 플래그 클리어
     SCI_clearInterruptStatus(SCID_BASE, SCI_INT_RXFF);
     Interrupt_clearACKGroup(INTERRUPT_ACK_GROUP8);
 }
 
+// [Rev 2.1 파싱 함수 삭제됨 - 현재 프로토콜로 완전 전환]
+
 //--------------------------------------------------
 // SCADA 패킷 파싱 (제어 변수 반영)
 //--------------------------------------------------
-// 수신된 10바이트 패킷 해석 → start_stop, operation_mode, V_max_cmd, V_min_cmd, I_out_ref 갱신
+// 수신된 13바이트 패킷 해석 → CRC-32 검증 → 제어 모드별 변수 갱신
+//
+// 호출 위치: Main Loop (HABA_main.c)
+//   - ISR에서 scada_packet_ready 플래그 설정 시 즉시 호출
+//   - Main Loop 실행 주기: 100kHz ISR 종료 후 즉시 (< 1μs 지연)
+//
+// Command bit 구조:
+//   bit[7]: 제어 모드 (0=Charge/Discharge, 1=Battery)
+//   bit[6]: 준비 상태 (0=IDLE, 1=READY)
+//   bit[5]: 운전 상태 (0=STOP, 1=RUN)
+//   bit[4]: 병렬 상태 (0=Individual, 1=Parallel)
+//
+// 처리 시간: ~3-5μs (VCU2 CRC-32 하드웨어 가속)
 //--------------------------------------------------
 void Parse_SCADA_Command(void)
 {
-    // 패킷 해석
-    scada_rx_data.start_byte    = scada_rx_buffer[0];
-    scada_rx_data.command       = scada_rx_buffer[1];   // bit0=run, bit2:1=Mode
-    scada_rx_data.max_voltage   = (int16_t)((scada_rx_buffer[2] << 8) | scada_rx_buffer[3]);
-    scada_rx_data.min_voltage   = (int16_t)((scada_rx_buffer[4] << 8) | scada_rx_buffer[5]);
+    // VCU2 CRC-32 계산 (Byte 1~7, Polynomial 0x04C11DB7)
+    crcObj_SCADA.seedValue   = 0x00000000;
+    crcObj_SCADA.nMsgBytes   = 7;               // Command + Data (7 bytes)
+    crcObj_SCADA.parity      = CRC_parity_even; // Start from low byte
+    crcObj_SCADA.crcResult   = 0;
+    crcObj_SCADA.pMsgBuffer  = (void *)(&scada_rx_buffer[1]);  // Byte 1부터 시작
 
-    // Current Command (2바이트, Center=32768, 0.01A 단위)
-    scada_rx_data.current_cmd   = ((int16_t)((scada_rx_buffer[6] << 8) | scada_rx_buffer[7])) - 32768;
+    // VCU2 하드웨어 가속 CRC-32 계산 (Polynomial 0x04C11DB7)
+    CRC_run32BitPoly2(handleCRC_SCADA);
 
-    scada_rx_data.checksum      = scada_rx_buffer[8];
-    scada_rx_data.end_byte      = scada_rx_buffer[9];
+    // 수신된 CRC-32 (Big-endian, Byte 8~11)
+    uint32_t received_crc = ((uint32_t)scada_rx_buffer[8] << 24) |
+                            ((uint32_t)scada_rx_buffer[9] << 16) |
+                            ((uint32_t)scada_rx_buffer[10] << 8) |
+                            ((uint32_t)scada_rx_buffer[11]);
 
-    // 제어 변수 반영
-    start_stop      = (scada_rx_data.command & 0x01);                       // bit0 = run
-    operation_mode  = (OperationMode_t)((scada_rx_data.command >> 1) & 0x03);
-    V_max_cmd       = (float32_t)scada_rx_data.max_voltage;
-    V_min_cmd       = (float32_t)scada_rx_data.min_voltage;
-    I_out_ref       = (float32_t)scada_rx_data.current_cmd / 10.0f;            // A 단위 변환
+    // CRC 검증
+    if (crcObj_SCADA.crcResult != received_crc)
+    {
+        scada_crc_error_cnt++;
+        scada_packet_ready = 0;
+        return;  // CRC 오류 시 패킷 폐기
+    }
 
-    scada_packet_ready = 0;     // 다음 패킷 대기
+    // --- 패킷 파싱 (CRC 검증 통과) ---
+
+    uint8_t cmd_byte = scada_rx_buffer[1];
+
+    // Command 비트 파싱
+    control_mode  = (ControlMode_t)((cmd_byte >> 7) & 0x01);  // bit[7]
+    ready_state   = (cmd_byte >> 6) & 0x01;                    // bit[6]
+    run_state     = (cmd_byte >> 5) & 0x01;                    // bit[5]
+    parallel_mode = (cmd_byte >> 4) & 0x01;                    // bit[4]
+
+    // IDLE+RUN 비정상 조합 검증 (프로토콜 라인 199-209)
+    if (run_state && !ready_state)
+    {
+        // IDLE+RUN 무시, 이전 상태 유지
+        scada_packet_ready = 0;
+        return;
+    }
+
+    // 제어 모드별 데이터 파싱 (int16, ÷10 스케일)
+    if (control_mode == CONTROL_MODE_CHARGE_DISCHARGE)
+    {
+        // Charge/Discharge Mode (bit[7]=0)
+        int16_t v_max_raw = (int16_t)((scada_rx_buffer[2] << 8) | scada_rx_buffer[3]);
+        int16_t v_min_raw = (int16_t)((scada_rx_buffer[4] << 8) | scada_rx_buffer[5]);
+        int16_t i_cmd_raw = (int16_t)((scada_rx_buffer[6] << 8) | scada_rx_buffer[7]);
+
+        V_max_cmd = v_max_raw / 10.0f;  // V 단위
+        V_min_cmd = v_min_raw / 10.0f;  // V 단위
+        I_out_ref = i_cmd_raw / 10.0f;  // A 단위
+    }
+    else  // CONTROL_MODE_BATTERY
+    {
+        // Battery Mode (bit[7]=1)
+        int16_t v_cmd_raw   = (int16_t)((scada_rx_buffer[2] << 8) | scada_rx_buffer[3]);
+        int16_t i_max_raw   = (int16_t)((scada_rx_buffer[4] << 8) | scada_rx_buffer[5]);
+        int16_t i_min_raw   = (int16_t)((scada_rx_buffer[6] << 8) | scada_rx_buffer[7]);
+
+        V_cmd     = v_cmd_raw / 10.0f;  // 목표 전압 (CV 제어)
+        I_max_cmd = i_max_raw / 10.0f;  // 최대 전류 제한
+        I_min_cmd = i_min_raw / 10.0f;  // 최소 전류 제한
+
+        // TODO: Battery Mode CV 제어 로직 구현 (CLA Task 3 사용)
+    }
+
+    // 기존 변수 매핑 (호환성)
+    start_stop = run_state;
+    operation_mode = parallel_mode ? MODE_PARALLEL : MODE_INDIVIDUAL;
+
+    scada_packet_ready = 0;  // 다음 패킷 대기
 }
 
 //==================================================

@@ -23,17 +23,21 @@ float32_t V_fb              = 0.0f;     // 전압 피드백
 // CLA PI 제어기 (DCL) - CpuToCla1MsgRAM 섹션
 #pragma DATA_SECTION(pi_charge,        "CpuToCla1MsgRAM");
 #pragma DATA_SECTION(pi_discharge,     "CpuToCla1MsgRAM");
+#pragma DATA_SECTION(pi_cv,            "CpuToCla1MsgRAM");
 
-DCL_PI_CLA pi_charge    = PI_CLA_DEFAULTS;  // PI 제어기 (충전, V_max_cmd 기준)
-DCL_PI_CLA pi_discharge = PI_CLA_DEFAULTS;  // PI 제어기 (방전, V_min_cmd 기준)
+DCL_PI_CLA pi_charge    = PI_CLA_DEFAULTS;  // PI 제어기 (충전, V_max_cmd 기준) - CLA Task 1
+DCL_PI_CLA pi_discharge = PI_CLA_DEFAULTS;  // PI 제어기 (방전, V_min_cmd 기준) - CLA Task 2
+DCL_PI_CLA pi_cv        = PI_CLA_DEFAULTS;  // PI 제어기 (배터리 모드 CV, V_cmd 기준) - CLA Task 3
 
 // CLA → CPU (제어 결과) - Cla1ToCpuMsgRAM 섹션
 #pragma DATA_SECTION(I_PI_charge_out,    "Cla1ToCpuMsgRAM");
 #pragma DATA_SECTION(I_PI_discharge_out, "Cla1ToCpuMsgRAM");
+#pragma DATA_SECTION(I_PI_cv_out,        "Cla1ToCpuMsgRAM");
 #pragma DATA_SECTION(cla_cnt,            "Cla1ToCpuMsgRAM");
 
-float32_t I_PI_charge_out    = 0.0f;    // PI 출력 (충전 전류)
-float32_t I_PI_discharge_out = 0.0f;    // PI 출력 (방전 전류)
+float32_t I_PI_charge_out    = 0.0f;    // PI 출력 (충전 전류, Task 1)
+float32_t I_PI_discharge_out = 0.0f;    // PI 출력 (방전 전류, Task 2)
+float32_t I_PI_cv_out        = 0.0f;    // PI 출력 (배터리 모드 CV 전류, Task 3)
 uint16_t  cla_cnt            = 0;       // CLA 실행 카운터 (디버그용)
 
 //==================================================
@@ -81,14 +85,6 @@ float32_t V_batt_raw        = 0.0f;     // 원시 배터리 전압
 int32_t   V_batt_raw_sum    = 0;        // 배터리 전압 누적합 (평균용)
 float32_t V_batt_raw_avg    = 0.0f;     // 배터리 전압 평균
 float32_t V_batt_uncal      = 0.0f;     // 미캘리브레이션 배터리 전압
-float32_t V_batt_avg        = 0.0f;     // 배터리 평균 전압 (장기)
-
-// 전압 모니터링
-volatile float32_t V_out_ADC = 0.0f;    // SPI ADC 전압 원시값
-float32_t V_out_ADC_avg     = 0.0f;     // SPI ADC 전압 평균 (5회)
-uint32_t  V_out_ADC_sum     = 0;        // SPI ADC 전압 누적합
-float32_t V_fb_sum          = 0.0f;     // 전압 피드백 누적합 (장기 평균)
-uint32_t  V_cal_cnt         = 0;        // 전압 계산 카운터
 
 // 디스플레이용 전압
 float32_t V_out_display         = 0.0f; // 출력 전압 표시값
@@ -105,28 +101,13 @@ uint16_t  V_display_calc_cnt    = 0;    // 디스플레이 계산 카운터
 float32_t I_cmd             = 0.0f;     // 기본 전류 지령 (SCADA 수신)
 float32_t I_cmd_ramped      = 0.0f;     // 램프 제한 적용 전류
 float32_t I_cmd_PI_limited  = 0.0f;     // PI 제한 적용 전류 (DAC 출력용)
-// I_cmd_tmp - 삭제됨 (불필요, I_out_ref를 직접 사용)
-float32_t I_cmd_ch1         = 0.0f;     // CH1 전류 지령 (개별 운전)
-float32_t I_cmd_ch2         = 0.0f;     // CH2 전류 지령 (개별 운전)
 uint16_t  I_cmd_from_master = 0;        // 상위 마스터로부터 수신한 지령
 
 // 전류 센싱 (FPGA SPI)
-float32_t I_out_raw             = 0.0f; // 원시 출력 전류
-uint32_t  I_out_raw_sum         = 0;    // 출력 전류 누적합
-float32_t I_out_raw_avg         = 0.0f; // 출력 전류 평균
-float32_t I_out_sen_sum         = 0.0f; // 전류 센싱 누적합
-float32_t I_out_sen_sum_monitor = 0.0f; // 모니터용 전류 누적합
-
-// 전류 센싱 (ADC)
-uint16_t  I_out_ADC         = 0;        // 실시간 ADC 전류값 (100kHz)
-uint32_t  I_out_ADC_sum     = 0;        // 전류 ADC 누적합 (5회 평균용)
-uint32_t  I_out_ADC_avg     = 0;        // 5회 평균 ADC 전류값 (20kHz)
+float32_t I_out_raw         = 0.0f;     // 원시 출력 전류
 
 // 전류 피드백 및 평균
 float32_t I_out_avg         = 0.0f;     // 출력 전류 평균
-float32_t I_fb_sum          = 0.0f;     // 전류 피드백 누적합 (장기 평균)
-float32_t I_fb_avg          = 0.0f;     // 전류 피드백 평균
-int16_t   I_cal_cnt         = 0;        // 전류 계산 카운터
 int16_t   I_out_ref         = 0;        // 전류 레퍼런스
 
 //==================================================
@@ -232,7 +213,7 @@ uint8_t scib_rs485_ms_tx_buf[4] = {0x1B, 0, 0, 0x03};    // SCIB RS485 Master-to
 // [14] SCADA 인터페이스
 //==================================================
 
-volatile SCADA_PACKET scada_rx_data;                     // SCADA 수신 패킷
+// SCADA 수신 버퍼 (공통)
 volatile uint16_t scada_packet_ready = 0;                // 패킷 준비 플래그
 volatile uint8_t  scada_rx_buffer[SCADA_RX_BUFFER_SIZE] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00
@@ -241,12 +222,19 @@ volatile uint16_t scada_rx_index    = 0;                 // 수신 버퍼 인덱
 uint8_t slave_tx_buffer[7]          = {0};               // 슬레이브 송신 버퍼
 uint8_t system_tx_buffer[7]         = {0};               // 시스템 송신 버퍼
 
-// SCADA 명령
-volatile uint16_t g_systemRunCommand    = 0;             // 시스템 실행 명령
-volatile int16_t  g_maxVoltageSet       = 0;             // 최대 전압 설정
-volatile int16_t  g_minVoltageSet       = 0;             // 최소 전압 설정
-volatile int8_t   g_currentCommandSet   = 0;             // 전류 지령 설정
-volatile uint8_t  SCADA_cmd             = 0;             // SCADA 명령
+// SCADA 제어 변수
+volatile ControlMode_t control_mode = CONTROL_MODE_CHARGE_DISCHARGE;  // 제어 모드 (초기값: 충방전)
+volatile uint8_t  ready_state   = 0;                     // Ready 상태 (bit[6], 초기값: IDLE)
+volatile uint8_t  run_state     = 0;                     // Run 상태 (bit[5], 초기값: STOP)
+volatile uint8_t  parallel_mode = 0;                     // Parallel 모드 (bit[4], 초기값: Individual)
+
+// 배터리 모드 제어 지령
+float32_t V_cmd     = 0.0f;                              // 목표 전압 (배터리 모드 CV 제어)
+float32_t I_max_cmd = 80.0f;                             // 최대 전류 제한 (초기값: 80A)
+float32_t I_min_cmd = -80.0f;                            // 최소 전류 제한 (초기값: -80A)
+
+// CRC 검증
+uint32_t scada_crc_error_cnt = 0;                        // CRC 에러 카운터
 
 //==================================================
 // [15] 클럭 정보
@@ -260,12 +248,9 @@ volatile uint32_t Epwm1CLK      = 0;    // EPWM1 클럭
 volatile uint32_t Epwm3CLK      = 0;    // EPWM3 클럭
 
 //==================================================
-// [16] ADC 변수 (사용 여부 확인 필요)
+// [16] ADC 변수
 //==================================================
-
-uint16_t adc_current        = 0;        // ADC 전류 (미사용?)
-uint16_t adc_batt_voltage   = 0;        // ADC 배터리 전압 (미사용?)
-uint16_t adc_out_voltage    = 0;        // ADC 출력 전압 (미사용?)
+// ADC 기반 센싱은 사용하지 않음 (FPGA SPI 사용)
 
 //==================================================
 // [17] 테스트 변수 (디버그용)

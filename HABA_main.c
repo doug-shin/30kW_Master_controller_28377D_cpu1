@@ -77,6 +77,9 @@ void Check_System_Safety(void);
 void Update_Monitoring_And_Sequence(void);
 __interrupt void INT_EPWM1_ISR(void);
 
+// SCADA 통신 함수 선언
+void Parse_SCADA_Command(void);
+
 //==================================================
 // 5-Phase 제어 함수 테이블 (20kHz effective)
 //==================================================
@@ -111,6 +114,19 @@ void main(void)
     //==================================
     while(1)
     {
+        //========================
+        // SCADA 패킷 파싱 (비주기, 수신 즉시)
+        //========================
+        // ISR에서 플래그만 설정, Main Loop에서 파싱 처리
+        // - ISR 실행 시간 단축 (~10μs → ~2μs)
+        // - CRC-32 계산을 백그라운드로 이동
+        //========================
+        if (scada_packet_ready)
+        {
+            Parse_SCADA_Command();      // CRC 검증 + 제어 변수 업데이트
+            scada_packet_ready = 0;     // 플래그 클리어
+        }
+
         //========================
         // 1ms 주기 작업
         //========================

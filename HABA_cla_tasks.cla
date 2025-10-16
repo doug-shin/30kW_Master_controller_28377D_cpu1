@@ -44,9 +44,12 @@ __interrupt void Cla1Task2(void)
     // V_min_I_term = pi_discharge.i10;
 }
 
-__interrupt void Cla1Task3 ( void )
+__interrupt void Cla1Task3(void)
 {
-
+    // CLA Task 3: PI Controller (Battery Mode CV)
+    // Battery 모드 CV 제어기 (V_cmd 기준)
+    // DCL_runPI_L1(): Series form PI controller
+    I_PI_cv_out = DCL_runPI_L1(&pi_cv, V_cmd, V_fb);
 }
 
 __interrupt void Cla1Task4 ( void )

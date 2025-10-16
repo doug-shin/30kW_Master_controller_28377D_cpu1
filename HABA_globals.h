@@ -94,8 +94,6 @@ extern "C" {
 // --- 시스템 구성 상수 ---
 #define SLAVES_PER_CHANNEL        (6)         // 채널당 슬레이브 수
 #define TOTAL_CHANNELS            (2)         // 전체 채널 수 (CH1, CH2)
-#define TOTAL_SLAVES              (12)        // 전체 슬레이브 수 (6 x 2)
-#define SLAVE_MAX_CURRENT         (80.0f)     // 슬레이브 최대 전류 (A)
 
 // --- 채널/마스터 ID 정의 ---
 #define CH1_ID                    (0)         // 채널1 마스터 ID 값
@@ -104,10 +102,6 @@ extern "C" {
 // --- 채널 판별 매크로 (master_id 비교 없이 사용) ---
 #define IS_CH1                    (master_id == CH1_ID)     // CH1 마스터인가?
 #define IS_CH2                    (master_id == CH2_ID)     // CH2 마스터인가?
-
-// 호환성 매크로
-#define MASTER1                   CH1_ID      // 상위 마스터
-#define MASTER2                   CH2_ID      // 하위 마스터
 
 // --- 보호 임계값 ---
 #define OVER_VOLTAGE        (1400)      // 과전압 보호 임계값 (V)
@@ -121,8 +115,6 @@ extern "C" {
 
 // --- 타이밍 상수 (20kHz 기준) ---
 #define TIMING_1SEC_AT_20KHZ        (20000)     // 1초 = 20kHz × 20000
-#define TIMING_2SEC_AT_20KHZ        (40000)     // 2초 = 20kHz × 40000
-#define TIMING_500MS_AT_20KHZ       (10000)     // 0.5초 = 20kHz × 10000
 #define TIMING_200SAMPLES           (200)       // 200샘플 = 10ms @ 20kHz
 
 // --- 타이밍 상수 (100kHz 기준, ISR) ---
@@ -142,7 +134,6 @@ extern "C" {
 #define DAC_MIN_VALUE               (0)         // DAC 최소값
 #define DAC_MAX_VALUE               (65535)     // DAC 최대값
 #define DAC_CENTER_VALUE            (32768)     // DAC 중앙값 (0A)
-#define CURRENT_RANGE_MAX           (100.0f)    // 전류 범위 최대값 (±100A)
 
 #define INT16_MAX_VALUE             (32767)     // int16 최대값
 #define INT16_MIN_VALUE             (-32768)    // int16 최소값
@@ -152,7 +143,7 @@ extern "C" {
 #define VOLTAGE_TEST_MAX            (5000)      // 전압 테스트 최대값 (500.0V)
 
 // --- SCADA 프로토콜 상수 ---
-#define SCADA_PACKET_SIZE           (10)        // SCADA 패킷 크기 (바이트)
+#define SCADA_PACKET_SIZE           (13)        // SCADA 패킷 크기 (바이트)
 #define SCADA_SLAVE_PACKET_SIZE     (7)         // 슬레이브 상태 패킷 크기
 #define SCADA_MAX_SLAVES            (15)        // SCADA 송신 최대 슬레이브 수
 
@@ -202,16 +193,10 @@ extern "C" {
 // 릴레이 상태 상수
 //==================================================
 
-// --- 릴레이 제어 (GPIO 직접 제어 방식) ---
-// 호환성 매크로 (하드웨어 기능 매크로 사용 권장)
-#define IS_RELAY_INDIVIDUAL_ON()    IS_MAIN_RELAY_ON()          // → IS_MAIN_RELAY_ON() 사용 권장
-#define IS_RELAY_PARALLEL_ON()      IS_PARALLEL_LINK_ON()       // → IS_PARALLEL_LINK_ON() 사용 권장
-
 // --- PI 제어 파라미터 ---
 #define Kp_set              1           // 비례 게인
 #define Ki_set              3000        // 적분 게인
 #define T_sample_set        50e-6f      // 샘플링 주기 (50us)
-#define I_out_MAX           80          // 최대 출력 전류 (A)
 
 // --- 저역통과 필터 파라미터 ---
 #define wc                  (1e+3)      // Cut-off frequency = 1kHz
@@ -220,7 +205,6 @@ extern "C" {
 // --- 통신 프로토콜 상수 ---
 #define STX                 0x1B        // Start of Text
 #define ETX                 0x03        // End of Text
-#define _1ms_num            100         // 10us * 100 = 1ms
 
 // --- CAN 통신 상수 ---
 #define MSG_DATA_LENGTH     4
@@ -314,6 +298,12 @@ typedef enum {
     MODE_RESERVED    = 3    // 예약 (미사용)
 } OperationMode_t;
 
+// --- 제어 모드 ---
+typedef enum {
+    CONTROL_MODE_CHARGE_DISCHARGE = 0,  // 충방전 모드 (bit[7]=0): V_max/V_min 제한, I_cmd 제어
+    CONTROL_MODE_BATTERY          = 1   // 배터리 모드 (bit[7]=1): V_cmd CV 제어, I_max/I_min 제한
+} ControlMode_t;
+
 // --- 시스템 상태 ---
 typedef enum {
     STATE_NO_OP,            // 동작 없음
@@ -339,17 +329,9 @@ typedef enum {
 #define SCADA_RX_BUFFER_SIZE            10
 #define Rack_Channel                    0       // 랙 번호 (0~3)
 
-// --- SCADA 수신 패킷 (SCADA → Master) ---
-typedef struct
-{
-    uint8_t  start_byte;    // 0x02 (STX)
-    uint8_t  command;       // bit[0]: Run(0=Stop,1=Start), bit[2:1]: Mode
-    int16_t  max_voltage;   // Byte2~3 최대 전압 (V)
-    int16_t  min_voltage;   // Byte4~5 최소 전압 (V)
-    int16_t  current_cmd;   // Byte6~7 전류 지령 (A)
-    uint8_t  checksum;      // Byte8 체크섬 (Sum Byte1~7)
-    uint8_t  end_byte;      // 0x03 (ETX)
-} SCADA_PACKET;
+// SCADA 수신 패킷 구조 (13 bytes):
+//   [STX][CMD][Param1_H][Param1_L][Param2_H][Param2_L][Param3_H][Param3_L][CRC32_3][CRC32_2][CRC32_1][CRC32_0][ETX]
+//   구조체 없이 scada_rx_buffer[] 배열에서 직접 파싱
 
 // --- 시스템 전압 송신 패킷 (Master → SCADA) ---
 typedef struct
@@ -402,17 +384,19 @@ typedef struct
 //--------------------------------------------------
 
 // CPU → CLA (제어 지령)
-extern float32_t V_max_cmd;            // 최대 전압 지령 (충전)
-extern float32_t V_min_cmd;            // 최소 전압 지령 (방전)
+extern float32_t V_max_cmd;            // 최대 전압 지령 (충전 모드, Rev 2.1)
+extern float32_t V_min_cmd;            // 최소 전압 지령 (방전 모드, Rev 2.1)
 extern float32_t V_fb;                 // 전압 피드백
 
 // CLA PI 제어기 (DCL - Digital Control Library)
-extern DCL_PI_CLA pi_charge;           // PI 제어기 (충전 모드, V_max_cmd 기준)
-extern DCL_PI_CLA pi_discharge;        // PI 제어기 (방전 모드, V_min_cmd 기준)
+extern DCL_PI_CLA pi_charge;           // PI 제어기 (충전 모드, V_max_cmd 기준) - CLA Task 1
+extern DCL_PI_CLA pi_discharge;        // PI 제어기 (방전 모드, V_min_cmd 기준) - CLA Task 2
+extern DCL_PI_CLA pi_cv;               // PI 제어기 (배터리 모드 CV 제어, V_cmd 기준) - CLA Task 3
 
 // CLA → CPU (제어 결과)
-extern float32_t I_PI_charge_out;      // PI 출력 (충전 전류)
-extern float32_t I_PI_discharge_out;   // PI 출력 (방전 전류)
+extern float32_t I_PI_charge_out;      // PI 출력 (충전 전류, Task 1)
+extern float32_t I_PI_discharge_out;   // PI 출력 (방전 전류, Task 2)
+extern float32_t I_PI_cv_out;          // PI 출력 (배터리 모드 CV 전류, Task 3)
 extern uint16_t  cla_cnt;              // CLA 실행 카운터 (디버그용)
 
 //--------------------------------------------------
@@ -460,14 +444,6 @@ extern float32_t V_batt_raw;                // 원시 배터리 전압
 extern int32_t   V_batt_raw_sum;            // 배터리 전압 누적합 (평균용)
 extern float32_t V_batt_raw_avg;            // 배터리 전압 평균
 extern float32_t V_batt_uncal;              // 미캘리브레이션 배터리 전압
-extern float32_t V_batt_avg;                // 배터리 평균 전압 (장기)
-
-// 전압 모니터링
-extern volatile float32_t V_out_ADC;        // SPI ADC 전압 원시값
-extern float32_t V_out_ADC_avg;             // SPI ADC 전압 평균 (5회)
-extern uint32_t  V_out_ADC_sum;             // SPI ADC 전압 누적합
-extern float32_t V_fb_sum;                  // 전압 피드백 누적합 (장기 평균)
-extern uint32_t  V_cal_cnt;                 // 전압 계산 카운터
 
 // 디스플레이용 전압
 extern float32_t V_out_display;             // 출력 전압 표시값
@@ -484,28 +460,13 @@ extern uint16_t  V_display_calc_cnt;        // 디스플레이 계산 카운터
 extern float32_t I_cmd;                     // 기본 전류 지령 (SCADA 수신)
 extern float32_t I_cmd_ramped;              // 램프 제한 적용 전류
 extern float32_t I_cmd_PI_limited;          // PI 제한 적용 전류 (DAC 출력용)
-// I_cmd_tmp - 삭제됨 (불필요, I_out_ref를 직접 사용)
-extern float32_t I_cmd_ch1;                 // CH1 전류 지령 (개별 운전)
-extern float32_t I_cmd_ch2;                 // CH2 전류 지령 (개별 운전)
 extern uint16_t  I_cmd_from_master;         // 상위 마스터로부터 수신한 지령
 
 // 전류 센싱 (FPGA SPI)
 extern float32_t I_out_raw;                 // 원시 출력 전류
-extern uint32_t  I_out_raw_sum;             // 출력 전류 누적합
-extern float32_t I_out_raw_avg;             // 출력 전류 평균
-extern float32_t I_out_sen_sum;             // 전류 센싱 누적합
-extern float32_t I_out_sen_sum_monitor;     // 모니터용 전류 누적합
-
-// 전류 센싱 (ADC)
-extern uint16_t  I_out_ADC;                 // 실시간 ADC 전류값 (100kHz)
-extern uint32_t  I_out_ADC_sum;             // 전류 ADC 누적합 (5회 평균용)
-extern uint32_t  I_out_ADC_avg;             // 5회 평균 ADC 전류값 (20kHz)
 
 // 전류 피드백 및 평균
 extern float32_t I_out_avg;                 // 출력 전류 평균
-extern float32_t I_fb_sum;                  // 전류 피드백 누적합 (장기 평균)
-extern float32_t I_fb_avg;                  // 전류 피드백 평균
-extern int16_t   I_cal_cnt;                 // 전류 계산 카운터
 extern int16_t   I_out_ref;                 // 전류 레퍼런스
 
 //--------------------------------------------------
@@ -566,7 +527,7 @@ extern uint32_t relay_off_delay_cnt;        // 릴레이 OFF 지연 카운터
 // [12] 릴레이 제어
 //--------------------------------------------------
 // Relay 상태 변수 제거됨 - Phase 3에서 GPIO 직접 제어 방식으로 변경
-// 상태 확인이 필요한 경우 IS_RELAY_INDIVIDUAL_ON(), IS_RELAY_PARALLEL_ON() 매크로 사용
+// 상태 확인이 필요한 경우 IS_MAIN_RELAY_ON(), IS_PARALLEL_LINK_ON() 매크로 사용
 
 //--------------------------------------------------
 // [13] 통신 버퍼
@@ -585,19 +546,26 @@ extern uint8_t scib_rs485_ms_tx_buf[4];     // SCIB RS485 Master-to-Slave 송신
 // [14] SCADA 인터페이스
 //--------------------------------------------------
 
-extern volatile SCADA_PACKET scada_rx_data;             // SCADA 수신 패킷
+// SCADA 수신 버퍼 (공통)
 extern volatile uint16_t scada_packet_ready;            // 패킷 준비 플래그
 extern volatile uint8_t  scada_rx_buffer[SCADA_RX_BUFFER_SIZE];  // SCADA 수신 버퍼
 extern volatile uint16_t scada_rx_index;                // 수신 버퍼 인덱스
 extern uint8_t slave_tx_buffer[7];                      // 슬레이브 송신 버퍼
 extern uint8_t system_tx_buffer[7];                     // 시스템 송신 버퍼
 
-// SCADA 명령
-extern volatile uint16_t g_systemRunCommand;            // 시스템 실행 명령
-extern volatile int16_t  g_maxVoltageSet;               // 최대 전압 설정
-extern volatile int16_t  g_minVoltageSet;               // 최소 전압 설정
-extern volatile int8_t   g_currentCommandSet;           // 전류 지령 설정
-extern volatile uint8_t  SCADA_cmd;                     // SCADA 명령
+// SCADA 제어 변수
+extern volatile ControlMode_t control_mode;             // 제어 모드 (충방전/배터리)
+extern volatile uint8_t  ready_state;                   // Ready 상태 (bit[6])
+extern volatile uint8_t  run_state;                     // Run 상태 (bit[5])
+extern volatile uint8_t  parallel_mode;                 // Parallel 모드 (bit[4])
+
+// 배터리 모드 제어 지령
+extern float32_t V_cmd;                                 // 목표 전압 (배터리 모드 CV 제어)
+extern float32_t I_max_cmd;                             // 최대 전류 제한 (배터리 모드)
+extern float32_t I_min_cmd;                             // 최소 전류 제한 (배터리 모드)
+
+// CRC 검증
+extern uint32_t scada_crc_error_cnt;                    // CRC 에러 카운터
 
 //--------------------------------------------------
 // [15] 클럭 정보
@@ -611,12 +579,9 @@ extern volatile uint32_t Epwm1CLK;          // EPWM1 클럭
 extern volatile uint32_t Epwm3CLK;          // EPWM3 클럭
 
 //--------------------------------------------------
-// [16] ADC 변수 (사용 여부 확인 필요)
+// [16] ADC 변수
 //--------------------------------------------------
-
-extern uint16_t adc_current;                // ADC 전류 (미사용?)
-extern uint16_t adc_batt_voltage;           // ADC 배터리 전압 (미사용?)
-extern uint16_t adc_out_voltage;            // ADC 출력 전압 (미사용?)
+// ADC 기반 센싱은 사용하지 않음 (FPGA SPI 사용)
 
 //--------------------------------------------------
 // [17] 테스트 변수 (디버그용)

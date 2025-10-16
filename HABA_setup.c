@@ -4,6 +4,11 @@
 #include "HABA_setup.h"
 #include "HABA_control.h"
 
+// CLA Task 함수 선언 (HABA_cla_tasks.cla에 정의됨)
+extern __interrupt void Cla1Task1(void);
+extern __interrupt void Cla1Task2(void);
+extern __interrupt void Cla1Task3(void);
+
 void Init_System()
 {
     Interrupt_initModule();
@@ -413,6 +418,7 @@ void Init_CPU1_CLA1(void)
 
     CLA_mapTaskVector(CLA1_BASE, CLA_MVECT_1, (uint16_t)&Cla1Task1);
     CLA_mapTaskVector(CLA1_BASE, CLA_MVECT_2, (uint16_t)&Cla1Task2);
+    CLA_mapTaskVector(CLA1_BASE, CLA_MVECT_3, (uint16_t)&Cla1Task3);
 
     CLA_enableIACK(CLA1_BASE);
     CLA_enableTasks(CLA1_BASE, CLA_TASKFLAG_ALL);
@@ -448,6 +454,18 @@ void Init_CPU1_CLA1(void)
     pi_discharge.i10   = 0.0f;                      // 적분기 값 초기화
     pi_discharge.i6    = 1.0f;                      // Saturation flag 초기화
     pi_discharge.i11   = 0.0f;                      // Tustin integrator 초기화
+
+    // pi_cv: Battery 모드 CV 제어 (V_cmd 기준)
+    pi_cv.Kp   = Kp_set;                            // 비례 게인 = 1
+    pi_cv.Ki   = Ki_set * T_sample_set;             // 적분 게인 = 3000 * 50e-6 = 0.15
+    pi_cv.Umax = CURRENT_LIMIT_PARALLEL;            // 출력 상한 = 960A (I_max_cmd로 동적 업데이트)
+    pi_cv.Umin = -CURRENT_LIMIT_PARALLEL;           // 출력 하한 = -960A (I_min_cmd로 동적 업데이트)
+    pi_cv.Imax = CURRENT_LIMIT_PARALLEL;            // Anti-windup 상한 = 960A (동적 업데이트)
+    pi_cv.Imin = -CURRENT_LIMIT_PARALLEL;           // Anti-windup 하한 = -960A (동적 업데이트)
+    // 내부 상태 수동 초기화
+    pi_cv.i10  = 0.0f;                              // 적분기 값 초기화
+    pi_cv.i6   = 1.0f;                              // Saturation flag 초기화
+    pi_cv.i11  = 0.0f;                              // Tustin integrator 초기화
 }
 
 

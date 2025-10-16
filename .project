@@ -58,6 +58,16 @@
 			<type>1</type>
 			<locationURI>COM_TI_C2000WARE_INSTALL_DIR/driverlib/f2837xd/driverlib/ccs/Debug/driverlib.lib</locationURI>
 		</link>
+		<link>
+			<name>vcu2_crc_32.asm</name>
+			<type>1</type>
+			<locationURI>COM_TI_C2000WARE_INSTALL_DIR/libraries/dsp/VCU/c28/source/vcu2/crc/vcu2_crc_32.asm</locationURI>
+		</link>
+		<link>
+			<name>vcu2_crc_utils.asm</name>
+			<type>1</type>
+			<locationURI>COM_TI_C2000WARE_INSTALL_DIR/libraries/dsp/VCU/c28/source/vcu2/crc/vcu2_crc_utils.asm</locationURI>
+		</link>
 	</linkedResources>
 	<variableList>
 		<variable>

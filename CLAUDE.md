@@ -135,7 +135,8 @@ The CLA runs **independent of CPU** for deterministic, low-latency PI control us
 **Tasks**:
 - `Cla1Task1`: Charge mode PI controller (V_max_cmd reference)
 - `Cla1Task2`: Discharge mode PI controller (V_min_cmd reference)
-- Tasks 3-8: Reserved (currently unused)
+- `Cla1Task3`: Battery mode CV controller (V_cmd reference)
+- Tasks 4-8: Reserved (currently unused)
 
 **DCL PI Controller (DCL_PI_CLA)**:
 ```c
@@ -160,6 +161,9 @@ I_PI_charge_out = DCL_runPI_L1(&pi_charge, V_max_cmd, V_fb);
 
 // Task 2: Discharge mode
 I_PI_discharge_out = DCL_runPI_L1(&pi_discharge, V_min_cmd, V_fb);
+
+// Task 3: Battery mode CV control
+I_PI_cv_out = DCL_runPI_L1(&pi_cv, V_cmd, V_fb);
 ```
 
 **Advantages of DCL**:
@@ -169,8 +173,8 @@ I_PI_discharge_out = DCL_runPI_L1(&pi_discharge, V_min_cmd, V_fb);
 - Better maintainability
 
 **CPU-CLA Shared Memory**:
-- **CpuToCla1MsgRAM**: `pi_charge`, `pi_discharge` (DCL_PI_CLA structures), `V_max_cmd`, `V_min_cmd`, `V_fb`
-- **Cla1ToCpuMsgRAM**: `I_PI_charge_out`, `I_PI_discharge_out`, `cla_cnt` (debug counter)
+- **CpuToCla1MsgRAM**: `pi_charge`, `pi_discharge`, `pi_cv` (DCL_PI_CLA structures), `V_max_cmd`, `V_min_cmd`, `V_cmd`, `V_fb`
+- **Cla1ToCpuMsgRAM**: `I_PI_charge_out`, `I_PI_discharge_out`, `I_PI_cv_out`, `cla_cnt` (debug counter)
 
 **CLA + DCL Initialization**: `Init_CPU1_CLA1()` in `HABA_setup.c`
 ```c
@@ -211,10 +215,11 @@ pi_charge.i11 = 0.0f;
 - Function: `Read_FPGA_Data()` called every 100kHz ISR
 
 **SCID (SCADA Interface)** @ 115200 baud:
-- Protocol: Custom 10-byte packet with STX/ETX framing
-- Commands: run/Stop, Mode selection, Voltage/Current setpoints
-- Modbus-like checksum validation
+- Protocol: 13-byte packet with STX/ETX framing and CRC-32 validation
+- Commands: Control mode selection, Run/Stop, Operation mode, Voltage/Current setpoints
+- VCU2 hardware-accelerated CRC-32 (polynomial 0x04C11DB7)
 - Functions: `Parse_SCADA_Command()`, `Send_Slave_Status_To_SCADA()`, `Send_System_Voltage_To_SCADA()`
+- **Protocol Documentation**: See `docs/RS232_interface_protocol_rev4.md`
 
 ### Operating Modes
 
@@ -226,27 +231,44 @@ MODE_INDIVIDUAL (1) // CH1/CH2 operate with independent current references
 MODE_PARALLEL (2)    // Upper master runs PI, lower master passes through commands
 ```
 
+**Control Mode** (controlled by `control_mode` enum):
+```c
+CONTROL_MODE_CHARGE_DISCHARGE (0)  // Charge/Discharge mode: V_max/V_min limits, I_cmd control
+CONTROL_MODE_BATTERY (1)           // Battery mode: V_cmd CV control, I_max/I_min limits
+```
+
 Mode selection affects:
-- PI controller activation (which master runs closed-loop)
-- Relay configuration (independent vs parallel connection)
-- Current command routing
+- **Operation Mode**: PI controller activation (which master runs closed-loop), relay configuration, current command routing
+- **Control Mode**: CLA task selection (Task 1+2 vs Task 3), control parameter usage (V_max/V_min vs V_cmd)
 
 ### Sequence Control State Machine
 
-**Function**: `Sequence_Module()` in `HABA_Ctrl.c`
+**Function**: `Update_System_Sequence()` in `HABA_control.c`
 
 State progression controlled by `sequence_step`:
-- **Step 0**: Idle, waiting for start command
-- **Step 10**: Pre-charging sequence (capacitor charging via limiting resistor)
-- **Step 20**: Main contactor close, normal operation
+- **SEQ_STEP_IDLE (0)**: Precharge in progress, waiting for V_out ≈ V_batt (±2V)
+- **SEQ_STEP_PRECHARGE_DONE (10)**: Precharge complete, 1-second delay before main relay close
+- **SEQ_STEP_NORMAL_RUN (20)**: Main relay closed, normal operation
 - **Fault states**: Automatic shutdown on over-voltage/current/temperature
 
-**Protection Thresholds**:
+**Precharge Logic**:
 ```c
-OVER_VOLTAGE: 1400V
-OVER_CURRENT: 88.0A
-OVER_TEMP:    120°C
+// Precharge complete when voltage difference < 2V
+if ((V_out_display - V_batt_display) < 2.0f &&
+    (V_out_display - V_batt_display) > -2.0f)
+{
+    sequence_step = SEQ_STEP_PRECHARGE_DONE;  // → Step 10
+}
 ```
+
+**Protection Thresholds** (HABA_globals.h:106-109):
+```c
+OVER_VOLTAGE: 1400V   // Battery system max voltage
+OVER_CURRENT: 88.0A   // Slave module max current (80A nominal + 10% margin)
+OVER_TEMP:    120°C   // NTC temperature limit (heatsink)
+```
+
+⚠️ **Safety Note**: See `docs/POWER_CONTROL_REVIEW.md` for recommended protection threshold adjustments.
 
 ## Critical Code Sections
 
@@ -305,10 +327,10 @@ LED_SINGLE     (67) // Independent mode
 LED_DUAL       (68) // Parallel mode
 ```
 
-**Relays**:
-- Relay8 (GPIO8): Independent operation mode
-- Relay7 (GPIO9): Parallel operation mode
-- Pre-charge relay: Code commented out (requires restoration)
+**Relays** (controlled in Phase 3):
+- **Main Relay** (GPIO8): Battery connection, closed when `sequence_step >= SEQ_STEP_PRECHARGE_DONE`
+- **Parallel Link** (GPIO9): CH1↔CH2 parallel connection, closed only in `MODE_PARALLEL`
+- Pre-charge relay: Hardware present but control code removed (20250918)
 
 **Digital Inputs**:
 GPIO36-39 used for Master ID DIP switches (directly read via `Read_Master_ID_From_DIP()`).
@@ -384,11 +406,11 @@ GPIO92: 10ms task
 
 ### When Modifying Control Algorithms
 
-1. **Shared Variables**: Add to `HABA_shared.h` with `extern`, define in `HABA_shared.c`
-2. **CLA Access**: Variables accessed by CLA must be in message RAM (see `Init_CPU1_CLA1()`)
+1. **Shared Variables**: Add to `HABA_globals.h` with `extern`, define in `HABA_globals.c`
+2. **CLA Access**: Variables accessed by CLA must be in message RAM (see `Init_CPU1_CLA1()` in `HABA_setup.c`)
 3. **ISR Functions**: Use `#pragma CODE_SECTION(..., ".TI.ramfunc")` for time-critical code
 4. **Naming Convention**: Project uses Pascal_Snake_Case (e.g., `Update_Voltage_Sensing`, `Send_CANA_Message`) with uppercase preserved for acronyms (CAN, SPI, ADC, GPIO, etc.) and physical quantities (V, I)
-5. **Task Timing**: Respect 10μs ISR budget - offload heavy work to background loops
+5. **Task Timing**: Respect 10μs ISR budget - offload heavy work to background loops (see performance analysis in `docs/POWER_CONTROL_REVIEW.md`)
 
 ### When Adding Communication Features
 
@@ -486,3 +508,13 @@ When **enabled** (debug build):
 - GPIO toggles active for timing analysis
 - Use oscilloscope to measure execution time
 - Still ~10x faster than driverlib calls
+
+## Documentation
+
+Project documentation is organized in the `docs/` folder:
+- **POWER_CONTROL_REVIEW.md**: Expert analysis of power control system (PI tuning, safety, performance)
+- **RS232_interface_protocol_rev4.md**: SCADA communication protocol specification (latest)
+- **RS232_interface_protocol_rev2.1.md**: Legacy protocol documentation
+- **System_Control.MD**: ⚠️ Outdated development notes (historical reference only)
+
+For AI-assisted development guidance, see this `CLAUDE.md` file (keep in project root).
