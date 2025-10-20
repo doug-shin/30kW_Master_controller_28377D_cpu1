@@ -12,16 +12,16 @@
 // CLA Task 1: PI Controller (Charge Mode)
 //--------------------------------------------------
 // 충전 모드 PI 제어기 (V_max_cmd 기준)
-// DCL_runPI_L1(): Series form PI controller
+// DCL_runPI_L2(): Parallel form PI controller
 //--------------------------------------------------
 __interrupt void Cla1Task1(void)
 {
-    // DCL PI 제어기 실행
-    // I_PI_charge_out = DCL_runPI_L1(제어기, 목표값, 피드백)
-    I_PI_charge_out = DCL_runPI_L1(&pi_charge, V_max_cmd, V_fb);
-    
+    // DCL PI 제어기 실행 (Parallel form)
+    // I_PI_charge_out = DCL_runPI_L2(제어기, 목표값, 피드백)
+    I_PI_charge_out = DCL_runPI_L2(&pi_charge, V_max_cmd, V_fb);
+
     cla_cnt++;      // 실행 카운터 증가
-    
+
     // 디버그용 변수 (옵션, 필요시 활성화)
     // V_max_err = V_max_cmd - V_fb;
     // V_max_P_term = pi_charge.Kp * V_max_err;
@@ -32,12 +32,13 @@ __interrupt void Cla1Task1(void)
 // CLA Task 2: PI Controller (Discharge Mode)
 //--------------------------------------------------
 // 방전 모드 PI 제어기 (V_min_cmd 기준)
+// DCL_runPI_L2(): Parallel form PI controller
 //--------------------------------------------------
 __interrupt void Cla1Task2(void)
 {
-    // DCL PI 제어기 실행
-    I_PI_discharge_out = DCL_runPI_L1(&pi_discharge, V_min_cmd, V_fb);
-    
+    // DCL PI 제어기 실행 (Parallel form)
+    I_PI_discharge_out = DCL_runPI_L2(&pi_discharge, V_min_cmd, V_fb);
+
     // 디버그용 변수 (옵션, 필요시 활성화)
     // V_min_err = V_min_cmd - V_fb;
     // V_min_P_term = pi_discharge.Kp * V_min_err;
@@ -48,8 +49,8 @@ __interrupt void Cla1Task3(void)
 {
     // CLA Task 3: PI Controller (Battery Mode CV)
     // Battery 모드 CV 제어기 (V_cmd 기준)
-    // DCL_runPI_L1(): Series form PI controller
-    I_PI_cv_out = DCL_runPI_L1(&pi_cv, V_cmd, V_fb);
+    // DCL_runPI_L2(): Parallel form PI controller
+    I_PI_cv_out = DCL_runPI_L2(&pi_cv, V_cmd, V_fb);
 }
 
 __interrupt void Cla1Task4 ( void )

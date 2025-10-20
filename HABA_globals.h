@@ -122,6 +122,12 @@ extern "C" {
 #define TIMING_10MS_AT_100KHZ       (1000)      // 10ms = 100kHz × 1000
 #define TIMING_50MS_AT_100KHZ       (5000)      // 50ms = 100kHz × 5000
 
+// --- 제어 주기 상수 (ISR 내부) ---
+#define ISR_FREQUENCY_HZ            (100000)    // EPWM1 ISR 주파수 (100kHz)
+#define PHASE_CYCLE_FREQUENCY_HZ    (20000)     // Phase 순환 주파수 (20kHz, 5 phases @ 100kHz)
+#define ISR_PERIOD_US               (10)        // ISR 주기 (10μs)
+#define PHASE_PERIOD_US             (50)        // Phase 주기 (50μs)
+
 // --- Phase 제어 상수 ---
 #define NUM_CONTROL_PHASES          (5)         // 제어 Phase 개수 (0~4)
 
@@ -149,6 +155,17 @@ extern "C" {
 
 // --- 전압 차이 임계값 (Precharge) ---
 #define PRECHARGE_VOLTAGE_DIFF_OK   (2.0f)      // Precharge 완료 판정 전압 차 (±2V)
+
+// --- 고장 플래그 상수 ---
+#define FAULT_FLAG_ACTIVE           (1)         // 고장 발생 (활성)
+#define FAULT_FLAG_INACTIVE         (0)         // 정상 상태 (비활성)
+
+// --- LED 상태 상수 ---
+#define LED_ON                      (1)         // LED 켜짐
+#define LED_OFF                     (0)         // LED 꺼짐
+
+// --- 시퀀스 타이밍 상수 ---
+#define SEQ_PRECHARGE_DELAY_COUNT   (TIMING_1SEC_AT_20KHZ)  // Precharge 완료 후 1초 대기 (20000 counts @ 20kHz)
 
 //==================================================
 // 센싱 및 캘리브레이션 상수

@@ -50,9 +50,19 @@ CRC_Handle handleCRC_SCADA = &crcObj_SCADA;  // CRC 핸들
 //--------------------------------------------------
 // 헬퍼 함수: 전류 제한 (PI 출력 + 최종 제한)
 //--------------------------------------------------
-// PI 출력 범위와 최종 전류 제한을 단계적으로 적용
-// 운전 모드별 전류 제한 적용
-//--------------------------------------------------
+/**
+ * @brief 전류 지령에 PI 출력 범위와 시스템 레벨 제한을 적용
+ *
+ * @details 2단계 제한 전략:
+ *          1. PI 제어기 출력 범위 (I_PI_charge_out ~ I_PI_discharge_out)
+ *          2. 시스템 레벨 전류 제한 (운전 모드별: 개별 480A, 병렬 960A)
+ *
+ * @param[in] cmd_filtered  필터링된 전류 지령 (A)
+ * @return    제한 적용된 전류 지령 (A)
+ *
+ * @note 호출 위치: Apply_PI_And_Convert_DAC() (Phase 1, 20kHz)
+ * @note 실행 시간: ~0.5μs (inline 최적화)
+ */
 static inline float32_t Apply_Current_Limits(float32_t cmd_filtered)
 {
     float32_t limited;
@@ -76,9 +86,21 @@ static inline float32_t Apply_Current_Limits(float32_t cmd_filtered)
 //--------------------------------------------------
 // Phase 0: 전압 센싱 + CLA PI 제어기 트리거
 //--------------------------------------------------
-// 전압 센싱 및 캘리브레이션 → CLA Task Force (비블로킹)
-// CLA는 백그라운드에서 실행, 결과는 Phase 1에서 사용
-//--------------------------------------------------
+/**
+ * @brief Phase 0 제어 태스크 (전압 센싱 및 CLA PI 제어기 트리거)
+ *
+ * @details 파이프라인 제어 구조:
+ *          - V_out, V_batt 평균 계산 (5샘플 이동평균)
+ *          - 2단계 캘리브레이션 (물리값 변환 → 실측 보정)
+ *          - 제어 모드별 CLA Task 트리거 (비블로킹 Force)
+ *          - CLA는 백그라운드 실행, 결과는 Phase 1(10μs 후) 사용
+ *
+ * @note 호출 주기: 20kHz (100kHz ISR, 5-phase rotation)
+ * @note 실행 시간: ~2μs (CLA Force 포함)
+ * @note RAM 배치: Flash 대기 시간 제거 (.TI.ramfunc)
+ *
+ * @see Apply_PI_And_Convert_DAC() - Phase 1에서 CLA 결과 사용
+ */
 #pragma CODE_SECTION(Sensing_And_Trigger_PI, ".TI.ramfunc");
 void Sensing_And_Trigger_PI(void)
 {
@@ -129,9 +151,24 @@ void Sensing_And_Trigger_PI(void)
 //--------------------------------------------------
 // Phase 1: PI 결과 적용 및 DAC 변환
 //--------------------------------------------------
-// CLA 결과(Phase 0에서 트리거) 사용 → 운전 모드별 분기 → DAC 변환
-// Phase 0에서 10us 경과 → CLA 완료 보장 (CLA는 0.1-0.2us만 소요)
-//--------------------------------------------------
+/**
+ * @brief Phase 1 제어 태스크 (PI 제어 결과 적용 및 슬레이브 DAC 변환)
+ *
+ * @details 처리 흐름:
+ *          1. CLA 결과 수신 (Phase 0에서 10μs 경과 → 완료 보장)
+ *          2. 제어 모드 분기 (Charge/Discharge vs Battery)
+ *          3. 운전 모드 분기 (Individual vs Parallel)
+ *          4. 전류 제한 적용 (PI 범위 → 시스템 레벨)
+ *          5. 슬레이브 전류 지령 변환 (±100A → 0~65535 DAC 코드)
+ *
+ * @note 호출 주기: 20kHz (100kHz ISR, 5-phase rotation)
+ * @note 실행 시간: ~3μs
+ * @note CLA 완료 보장: Phase 0 트리거 후 10μs 경과 (CLA 실행은 0.1~0.2μs)
+ * @note RAM 배치: Flash 대기 시간 제거 (.TI.ramfunc)
+ *
+ * @see Sensing_And_Trigger_PI() - Phase 0에서 CLA 트리거
+ * @see Transmit_Current_Command() - Phase 2에서 DAC 값 송신
+ */
 #pragma CODE_SECTION(Apply_PI_And_Convert_DAC, ".TI.ramfunc");
 void Apply_PI_And_Convert_DAC(void)
 {
@@ -314,13 +351,25 @@ void Transmit_Current_Command(void)
 //--------------------------------------------------
 // Phase 3: 시스템 안전 체크
 //--------------------------------------------------
-// 고장 감지, 비상 정지, 릴레이 제어
-//
-// 릴레이 제어 전략:
-//   - 메인 릴레이 (GPIO8): 프리차지 완료 후 ON (개별/병렬 무관)
-//   - 병렬 연결 릴레이 (GPIO9): 병렬 모드일 때만 ON
-//   - 안전 우선: run == 0 시 모든 릴레이 강제 OFF
-//--------------------------------------------------
+/**
+ * @brief Phase 3 제어 태스크 (안전 체크 및 릴레이 제어)
+ *
+ * @details 안전 기능:
+ *          - 과전압/과전류/과온 감지 (Check_Fault)
+ *          - 비상 정지 스위치 감시 (GPIO11)
+ *          - 상태 기반 릴레이 제어 (Direct Register Access)
+ *
+ * @details 릴레이 제어 전략:
+ *          - 메인 릴레이 (GPIO8): 프리차지 완료 후 ON (개별/병렬 무관)
+ *          - 병렬 연결 릴레이 (GPIO9): 병렬 모드일 때만 ON
+ *          - 안전 우선: run == 0 시 모든 릴레이 강제 OFF
+ *
+ * @note 호출 주기: 20kHz (100kHz ISR, 5-phase rotation)
+ * @note 실행 시간: ~1.5μs (GPIO 직접 액세스 사용)
+ * @note RAM 배치: Flash 대기 시간 제거 (.TI.ramfunc)
+ *
+ * @see Check_Fault() - 고장 감지 및 LED 제어
+ */
 #pragma CODE_SECTION(Check_System_Safety, ".TI.ramfunc");
 void Check_System_Safety(void)
 {
@@ -407,36 +456,52 @@ void Update_Monitoring_And_Sequence(void)
 //--------------------------------------------------
 // 고장 체크 및 LED 제어
 //--------------------------------------------------
-// 과전압/과전류/과온 감지 → run 플래그 및 LED 상태 갱신
-//--------------------------------------------------
+/**
+ * @brief 시스템 고장 감지 및 LED 상태 표시
+ *
+ * @details 보호 기능:
+ *          - 과전압 감지: V_out ≥ 1400V
+ *          - 과전류 감지: |I_out| ≥ 88A
+ *          - 과온 감지: NTC0 또는 NTC1 ≥ 120°C
+ *          - 비상 정지 스위치 상태 반영
+ *
+ * @note 호출 위치: Check_System_Safety() (Phase 3, 20kHz)
+ * @note 고장 발생 시: 모든 운전 LED OFF, 고장 LED ON
+ *
+ * @warning 고장 플래그는 래치(Latch) 방식 - 수동 리셋 필요
+ */
 void Check_Fault(void)
 {
-    // 고장 플래그 설정
-    if (V_out_display >= OVER_VOLTAGE)                          over_voltage_flag = 1;
-    if (fabs(I_out_avg) >= OVER_CURRENT)                        over_current_flag = 1;
-    if (NTC_0_temp >= OVER_TEMP || NTC_1_temp >= OVER_TEMP)    over_temp_flag = 1;
+    // 고장 조건 감지
+    bool is_overvoltage  = (V_out_display >= OVER_VOLTAGE);
+    bool is_overcurrent  = (fabs(I_out_avg) >= OVER_CURRENT);
+    bool is_overtemp     = (NTC_0_temp >= OVER_TEMP || NTC_1_temp >= OVER_TEMP);
+    bool is_fault_active = (is_overvoltage || is_overcurrent || is_overtemp);
 
-    // run 조건 판정
-    if (run_switch) {
-        run = 1;
-    } else {
-        run = 0;
-    }
+    // 고장 플래그 설정 (래치 방식)
+    if (is_overvoltage)  over_voltage_flag = FAULT_FLAG_ACTIVE;
+    if (is_overcurrent)  over_current_flag = FAULT_FLAG_ACTIVE;
+    if (is_overtemp)     over_temp_flag    = FAULT_FLAG_ACTIVE;
+
+    // 비상 정지 스위치 상태 반영
+    run = run_switch ? 1 : 0;
 
     // LED 상태 표시
-    if ((over_voltage_flag || over_current_flag || over_temp_flag) == 1)
+    if (is_fault_active)
     {
-        master_fault_flag = 0;
-        GPIO_writePin(LED_FAULT, 1);        // F_LED3 FAULT ON
-        GPIO_writePin(LED_CHARGE, 0);       // F_LED5 CHARGE OFF
-        GPIO_writePin(LED_DISCHARGE, 0);    // F_LED4 DISCHARGE OFF
-        GPIO_writePin(LED_SINGLE, 0);       // F_LED2 SINGLE OFF
-        GPIO_writePin(LED_DUAL, 0);         // F_LED1 DUAL OFF
+        // 고장 발생: 운전 정지 및 고장 표시
+        master_fault_flag = FAULT_FLAG_INACTIVE;
+        GPIO_writePin(LED_FAULT,     LED_ON);   // F_LED3 FAULT ON
+        GPIO_writePin(LED_CHARGE,    LED_OFF);  // F_LED5 CHARGE OFF
+        GPIO_writePin(LED_DISCHARGE, LED_OFF);  // F_LED4 DISCHARGE OFF
+        GPIO_writePin(LED_SINGLE,    LED_OFF);  // F_LED2 SINGLE OFF
+        GPIO_writePin(LED_DUAL,      LED_OFF);  // F_LED1 DUAL OFF
     }
     else
     {
-        master_fault_flag = 1;
-        GPIO_writePin(LED_FAULT, 0);        // F_LED3 FAULT OFF
+        // 정상 상태: 고장 LED OFF
+        master_fault_flag = FAULT_FLAG_ACTIVE;
+        GPIO_writePin(LED_FAULT, LED_OFF);      // F_LED3 FAULT OFF
     }
 }
 
@@ -700,9 +765,11 @@ void Update_System_Sequence(void)
                     V_min_cmd = 0;
                     I_out_ref = 2;
 
-                    // 프리차지 완료 조건: V_out ≈ V_batt (±2V)
-                    if ((V_out_display - V_batt_display) < PRECHARGE_VOLTAGE_DIFF_OK &&
-                        (V_out_display - V_batt_display) > -PRECHARGE_VOLTAGE_DIFF_OK)
+                    // 프리차지 완료 조건 판정: V_out ≈ V_batt (±2V 이내)
+                    float32_t voltage_diff = V_out_display - V_batt_display;
+                    bool is_precharge_complete = (fabs(voltage_diff) < PRECHARGE_VOLTAGE_DIFF_OK);
+
+                    if (is_precharge_complete)
                     {
                         pre_chg_ok = 1;
                         ready_state = 1;    // IDLE → READY 전환
@@ -732,9 +799,11 @@ void Update_System_Sequence(void)
                 I_out_ref = 0;
                 pre_chg_cnt++;
 
-                if (pre_chg_cnt >= TIMING_1SEC_AT_20KHZ) // 1초 대기 (20kHz × 20000 = 1s)
+                // 1초 대기 후 정상 운전으로 전환
+                bool is_delay_complete = (pre_chg_cnt >= SEQ_PRECHARGE_DELAY_COUNT);
+                if (is_delay_complete)
                 {
-                    pre_chg_cnt = TIMING_1SEC_AT_20KHZ;
+                    pre_chg_cnt = SEQ_PRECHARGE_DELAY_COUNT;  // 카운터 포화 방지
                     // 메인 릴레이 ON: Phase 3에서 sequence_step 기반 자동 처리
                     sequence_step = SEQ_STEP_NORMAL_RUN;
                 }

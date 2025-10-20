@@ -2,519 +2,374 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+## 프로젝트 개요
 
-TI C2000 F28377D dual-core DSP firmware for a 30kW battery power conversion system (Master Controller). The system manages up to 31 slave modules via CAN bus, with real-time PI control running on the CLA (Control Law Accelerator) at 100kHz.
+**팩사이클러(Pack Cycler) 시스템 충방전 제어용 마스터 컨트롤러**
 
-**Hardware Platform**: TI F28377D (200MHz dual-core C28x + CLA)
-**Build Tool**: Texas Instruments Code Composer Studio (CCS)
-**Target Configuration**: Flash or RAM execution modes
+TI F28377D 듀얼코어 DSP 기반 30kW 배터리 팩 충방전 제어 시스템의 마스터용 펌웨어입니다. 실시간 PI 제어를 CLA(Control Law Accelerator)에서 100kHz로 수행하며, 최대 12개의 슬레이브 모듈을 통합 제어합니다.
 
-## Build System
+### 시스템 구성
+- **마스터 컨트롤러**: 2개 (CH1, CH2) - 각 채널당 1개
+- **슬레이브 모듈**: 채널당 6개, 총 12개 (2채널 × 6모듈)
+- **모듈 출력**: 슬레이브당 80A, 30kW
+- **전체 용량**:
+  - 개별 모드: 채널당 480A (6모듈 × 80A)
+  - 병렬 모드: 960A (12모듈 × 80A, Master1이 Master2 제어)
 
-This is a CCS (Eclipse-based IDE) project. Build commands must be executed within CCS or via command-line tools provided by TI.
+### 하드웨어 플랫폼
+- **MCU**: TI TMS320F28377D (200MHz 듀얼코어 C28x + CLA)
+- **빌드 도구**: Code Composer Studio (CCS)
+- **실행 모드**: Flash 또는 RAM
 
-### Build Configurations
-- **CPU1_FLASH**: Production build targeting on-chip Flash memory
-- **CPU1_RAM**: Debug build running from RAM (faster iteration)
+---
 
-### Linker Command Files
-- `2837xD_FLASH_CLA_lnk_cpu1.cmd`: Flash build with CLA sections
-- `2837xD_RAM_CLA_lnk_cpu1.cmd`: RAM build with CLA sections
-- `F2837xD_Headers_nonBIOS_cpu1.cmd`: Memory-mapped peripheral headers
+## 빌드 시스템
 
-### Key Dependencies
-- **C2000Ware**: TI's software development kit (device support, driverlib)
-- **driverlib.lib**: Pre-compiled peripheral driver library
-- **DCL (Digital Control Library)**: TI's optimized control algorithms for CLA
-- Path variables: `COM_TI_C2000WARE_INSTALL_DIR`, `C2000WARE_DLIB_ROOT`
+### CCS 프로젝트 빌드
 
-### DCL (Digital Control Library) Integration
+CCS IDE 또는 TI 제공 커맨드라인 도구로 빌드합니다.
 
-**Include Path** (CCS Project Settings → Build → C2000 Compiler → Include Options):
+**빌드 구성**:
+- `CPU1_FLASH`: 프로덕션 빌드 (Flash 메모리 실행)
+- `CPU1_RAM`: 디버그 빌드 (RAM 실행, 빠른 반복 개발)
+
+**Linker 명령 파일**:
+- `2837xD_FLASH_CLA_lnk_cpu1.cmd`: Flash + CLA 섹션
+- `2837xD_RAM_CLA_lnk_cpu1.cmd`: RAM + CLA 섹션
+- `F2837xD_Headers_nonBIOS_cpu1.cmd`: 주변장치 메모리 맵
+
+### 의존성
+
+**필수 라이브러리**:
+- **C2000Ware**: TI SDK (device support, driverlib)
+- **driverlib.lib**: 주변장치 드라이버 (사전 컴파일)
+- **DCL (Digital Control Library)**: CLA용 최적화 제어 알고리즘
+
+**환경 변수**:
 ```
-${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/include
-```
-
-**Required Source Files** (Add to project):
-```
-${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_PI_L1.asm
-${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_PI_L2.asm
-${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_clamp_L1.asm
-${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_error.c
-```
-
-**Alternative** (if prebuilt library exists):
-Link against `dcl_cla.lib` or similar prebuilt DCL library for F28377D.
-
-**Header Files**:
-- `DCLCLA.h`: CLA-specific DCL functions (PI, PID controllers)
-- `DCL.h`: Common DCL types and utilities
-
-## Code Architecture
-
-### Module Organization
-
-```
-HABA_main.c                        Main entry point and control loop
-├── HABA_setup.c/h                 Hardware initialization and system setup (GPIO, PWM, CAN, SCI, SPI, ADC, CLA)
-├── HABA_control.c/h               Control algorithms, communication handlers, ISRs
-├── HABA_globals.c/h               Global variables, constants, shared data definitions
-└── HABA_cla_tasks.cla             CLA assembly tasks for high-speed PI control
+COM_TI_C2000WARE_INSTALL_DIR = /Applications/ti/C2000Ware_6_00_00_00
+C2000WARE_DLIB_ROOT = ${COM_TI_C2000WARE_INSTALL_DIR}/driverlib
 ```
 
-### Real-Time Control Architecture
+**DCL 통합** (CCS 프로젝트 설정):
+```
+Include Path:
+  ${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/include
 
-**Primary ISR**: `INT_EPWM1_ISR` @ 100kHz (EPWM1 period interrupt)
+Source Files (프로젝트에 추가):
+  ${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_PI_L1.asm
+  ${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_PI_L2.asm
+  ${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_clamp_L1.asm
+  ${COM_TI_C2000WARE_INSTALL_DIR}/libraries/control/DCL/c28/source/DCL_error.c
+```
 
-**5-Phase Task Scheduler with Pipelining** (20kHz effective per task):
-The control loop uses a pipelined architecture for optimal CPU-CLA parallelism:
+---
+
+## 코드 아키텍처
+
+### 핵심 모듈 구조
+
+```
+HABA_main.c              시스템 엔트리 포인트 및 메인 루프
+├── HABA_setup.c/h       하드웨어 초기화 (GPIO, PWM, CAN, SCI, SPI, ADC, CLA)
+├── HABA_control.c/h     제어 알고리즘, 통신 핸들러, ISR
+├── HABA_globals.c/h     전역 변수, 상수, 공유 데이터
+└── HABA_cla_tasks.cla   CLA PI 제어기 (DCL 기반, 100kHz)
+```
+
+### 실시간 제어 아키텍처
+
+**메인 ISR**: `INT_EPWM1_ISR` @ 100kHz (10μs 주기)
+
+**5-Phase 파이프라인 스케줄러** (20kHz 실효):
+
+CPU-CLA 병렬 실행을 위한 파이프라인 구조로, 함수 포인터 테이블로 구현:
 
 ```c
-// Function pointer table for clean phase execution
 static const PhaseFunction control_phase_table[5] = {
-    Sensing_And_Trigger_PI,         // Phase 0: Voltage sensing → LPF → CLA Force
-    Apply_PI_And_Convert_DAC,        // Phase 1: Use CLA results → DAC conversion
-    Transmit_Current_Command,        // Phase 2: RS485 transmission
-    Check_System_Safety,             // Phase 3: Fault detection & relay control
-    Update_Monitoring_And_Sequence   // Phase 4: Averaging & sequence control
+    Sensing_And_Trigger_PI,         // Phase 0: 센싱 + CLA Force (비블로킹)
+    Apply_PI_And_Convert_DAC,       // Phase 1: CLA 결과 사용 + DAC 변환
+    Transmit_Current_Command,       // Phase 2: RS485 전류 지령 전송
+    Check_System_Safety,            // Phase 3: 고장 감지 + 릴레이 제어
+    Update_Monitoring_And_Sequence  // Phase 4: 평균 계산 + 시퀀스
 };
 
-// ISR execution (replaces switch-case for clarity)
-control_phase_table[control_phase]();
+control_phase_table[control_phase]();  // ISR에서 순환 호출
 ```
 
-**Pipeline Flow**:
+**파이프라인 동작**:
 ```
-Phase 0 (n-th cycle):
-  ├─ Voltage sensing & calibration
-  ├─ Soft-start ramp calculation
-  ├─ LPF filtering
-  ├─ Anti-windup limit update
-  └─ CLA Task Force (non-blocking)
-      [CLA executes in background]
+Phase 0 (n-th):
+  전압 센싱 → 캘리브레이션 → LPF → CLA Force (백그라운드)
 
-Phase 1 (n-th cycle, 10us later):
-  ├─ CLA results ready (I_PI_charge_out, I_PI_discharge_out)
-  ├─ Operating mode selection
-  ├─ Current limiting
-  └─ DAC output conversion
+Phase 1 (n-th, 10μs 후):
+  CLA 결과(I_PI_*_out) → 전류 제한 → DAC 변환
 
-Phase 2-4: Communication & Monitoring
+Phase 2-4: 통신 및 모니터링
 ```
 
-**Pipeline Benefits**:
-- **Latency**: 10μs (vs 50μs without pipelining)
-- **CPU-CLA Parallelism**: CLA runs while CPU executes Phase 1-4
-- **No Blocking**: Force-only calls, no ForceAndWait
-- **Deterministic**: CLA completion guaranteed in 10μs (CLA needs only 0.1-0.2μs)
+**파이프라인 이점**:
+- 레이턴시: 10μs (파이프라인 없으면 50μs)
+- CPU-CLA 병렬 실행 (CLA 0.1~0.2μs 실행 중 CPU는 다른 Phase 처리)
+- 결정론적 완료 보장
 
-### Critical Timing Loops
+### 타이밍 루프
 
-**1ms Loop** (`flag_1ms`):
-- CAN bus communication with slave modules
-- Watchdog service
-- Emergency stop monitoring
+**1ms**: CAN 슬레이브 통신, Watchdog 서비스, 비상 정지 모니터링
+**10ms**: SCADA 패킷 파싱, 슬레이브 상태 업데이트, 상태 송신
+**50ms**: 시스템 전압 보고, Master ID 읽기
 
-**10ms Loop** (`flag_10ms`):
-- SCADA data reception and parsing
-- Slave status updates (channels 1-16)
-- System data transmission to SCADA
+---
 
-**50ms Loop** (`flag_50ms`):
-- System voltage reporting
-- Master ID selection
-- Extended diagnostics
+## CLA 제어 로직
 
-### CLA (Control Law Accelerator) Integration
+**CLA Tasks** (`HABA_cla_tasks.cla`):
+- `Cla1Task1`: 충전 모드 PI (V_max_cmd 기준)
+- `Cla1Task2`: 방전 모드 PI (V_min_cmd 기준)
+- `Cla1Task3`: 배터리 모드 CV (V_cmd 기준)
 
-The CLA runs **independent of CPU** for deterministic, low-latency PI control using **TI's DCL (Digital Control Library)**:
-
-**File**: `HABA_cla_tasks.cla`
-
-**Tasks**:
-- `Cla1Task1`: Charge mode PI controller (V_max_cmd reference)
-- `Cla1Task2`: Discharge mode PI controller (V_min_cmd reference)
-- `Cla1Task3`: Battery mode CV controller (V_cmd reference)
-- Tasks 4-8: Reserved (currently unused)
-
-**DCL PI Controller (DCL_PI_CLA)**:
+**DCL PI 제어기 사용법** (Parallel form):
 ```c
-// TI's optimized PI controller structure
-typedef struct {
-    float32_t Kp;       // Proportional gain
-    float32_t Ki;       // Integral gain (discrete: Ki_continuous * Ts)
-    float32_t i10;      // Integrator storage
-    float32_t Umax;     // Upper control saturation limit
-    float32_t Umin;     // Lower control saturation limit
-    float32_t i6;       // Saturation storage
-    float32_t i11;      // Integrator storage
-    float32_t Imax;     // Upper integrator saturation limit (Anti-windup)
-    float32_t Imin;     // Lower integrator saturation limit (Anti-windup)
-} DCL_PI_CLA;
+// CLA Task 예시 - Parallel form PI (L2)
+I_PI_charge_out = DCL_runPI_L2(&pi_charge, V_max_cmd, V_fb);
 ```
 
-**Usage in CLA Tasks**:
+**PI 제어 형태**:
+- **Parallel form** (L2): `u(k) = Kp×e(k) + I(k)`, `I(k+1) = I(k) + Ki×e(k)`
+- DCL 전환 전 사용하던 parallel form을 유지
+- L1(ideal form)은 `u(k) = Kp×(e(k) + I(k))`로 비례항이 적분에도 영향
+
+**CPU-CLA 공유 메모리**:
+- `CpuToCla1MsgRAM`: PI 구조체, 지령값, 피드백
+- `Cla1ToCpuMsgRAM`: PI 출력, 디버그 카운터
+
+**초기화** (`Init_CPU1_CLA1()` in `HABA_setup.c`):
 ```c
-// Task 1: Charge mode
-I_PI_charge_out = DCL_runPI_L1(&pi_charge, V_max_cmd, V_fb);
-
-// Task 2: Discharge mode
-I_PI_discharge_out = DCL_runPI_L1(&pi_discharge, V_min_cmd, V_fb);
-
-// Task 3: Battery mode CV control
-I_PI_cv_out = DCL_runPI_L1(&pi_cv, V_cmd, V_fb);
-```
-
-**Advantages of DCL**:
-- TI-optimized assembly code (~10-20 cycles per PI calculation)
-- Automatic Anti-windup handling
-- Standardized interface
-- Better maintainability
-
-**CPU-CLA Shared Memory**:
-- **CpuToCla1MsgRAM**: `pi_charge`, `pi_discharge`, `pi_cv` (DCL_PI_CLA structures), `V_max_cmd`, `V_min_cmd`, `V_cmd`, `V_fb`
-- **Cla1ToCpuMsgRAM**: `I_PI_charge_out`, `I_PI_discharge_out`, `I_PI_cv_out`, `cla_cnt` (debug counter)
-
-**CLA + DCL Initialization**: `Init_CPU1_CLA1()` in `HABA_setup.c`
-```c
-// Discrete-time PI (Ki = Ki_continuous * Ts)
-// Charge mode controller
+// 이산시간 PI (Ki = Ki_연속 × Ts)
 pi_charge.Kp = 1.0f;
 pi_charge.Ki = 3000.0f * 50e-6f;  // = 0.15
-pi_charge.Umax = 80.0f;
-pi_charge.Umin = -2.0f;
-pi_charge.Imax = 80.0f;  // Dynamic update in Sensing_And_Trigger_PI()
-pi_charge.Imin = -2.0f;
-// Manual reset (DCL_PI_CLA has no reset function)
-pi_charge.i10 = 0.0f;
-pi_charge.i6  = 1.0f;
-pi_charge.i11 = 0.0f;
+pi_charge.Umax = 80.0f;           // 출력 상한
+pi_charge.Imax = 80.0f;           // 적분기 상한 (동적 업데이트)
 ```
-- Memory mapping for message RAMs
-- Task trigger configuration
-- Scratchpad memory setup
 
-### Communication Protocols
+---
 
-**CAN Bus** (CANA @ 500kbps):
-- **TX**: Master commands to slaves (0xE0 base ID)
-- **RX**: Slave status feedback (0xF1-0xFF, mailboxes 2-16)
-- Protocol: 4-byte messages with current, temperature, status flags
-- Function: `Send_CANA_Message()`, `Read_CAN_Slave()`
+## 통신 프로토콜
 
-**RS485 (SCIA/B @ 5.625Mbps)**:
-- **SCIA RS485 (Master-to-Master)**: CH1 → CH2 current command transmission
-- **SCIB RS485 (Master-to-Slave)**: Master → Slave module current commands
-- DE (Driver Enable) GPIO control for half-duplex communication
-- Functions: `Send_RS485_MM_Current()`, `Send_RS485_MS_Current()`
+### CAN (CANA @ 500kbps)
+- **마스터 → 슬레이브**: 0xE0 (4바이트, Buck_EN 제어)
+- **슬레이브 → 마스터**: 0xF1~0xFF (메일박스 2~16, 전류/온도/상태)
+- 함수: `Send_CANA_Message()`, `Read_CAN_Slave()`
 
-**SPI Channels**:
-- **SPIA**: DAC80502 control (5MHz, 8-bit frames) - analog output
-- **SPIC**: FPGA communication (ADC data reception: Vo, Vbat, Io)
-- Function: `Read_FPGA_Data()` called every 100kHz ISR
+### RS485 (5.625Mbps)
+- **SCIA (Master-to-Master)**: CH1 → CH2 전류 지령 (병렬 모드)
+- **SCIB (Master-to-Slave)**: Master → 슬레이브 전류 지령
+- DE(Driver Enable) GPIO 제어로 half-duplex
+- 함수: `Send_RS485_MM_Current()`, `Send_RS485_MS_Current()`
 
-**SCID (SCADA Interface)** @ 115200 baud:
-- Protocol: 13-byte packet with STX/ETX framing and CRC-32 validation
-- Commands: Control mode selection, Run/Stop, Operation mode, Voltage/Current setpoints
-- VCU2 hardware-accelerated CRC-32 (polynomial 0x04C11DB7)
-- Functions: `Parse_SCADA_Command()`, `Send_Slave_Status_To_SCADA()`, `Send_System_Voltage_To_SCADA()`
-- **Protocol Documentation**: See `docs/RS232_interface_protocol_rev4.md`
+### SPI
+- **SPIA**: DAC80502 제어 (5MHz, 슬레이브 전류 지령 출력)
+- **SPIC**: FPGA ADC 통신 (V_out, V_batt, I_out 수신)
 
-### Operating Modes
+### SCADA (SCID @ 115200 baud)
+- 13바이트 패킷 (STX/ETX 프레이밍, CRC-32 검증)
+- 제어 명령: 모드 선택, Run/Stop, 전압/전류 설정값
+- 함수: `Parse_SCADA_Command()`, `Send_Slave_Status_To_SCADA()`
+- 프로토콜 명세: `docs/RS232_interface_protocol_rev4.md`
 
-Controlled by `operation_mode` enum:
+---
+
+## 운전 모드
+
+### Operation Mode (`operation_mode`)
+```c
+MODE_STOP (0)        // 시스템 정지
+MODE_INDIVIDUAL (1)  // CH1, CH2 독립 제어 (각각 6모듈씩)
+MODE_PARALLEL (2)    // CH1이 CH2 제어 (12모듈 통합, Master1이 PI, Master2는 패스스루)
+```
+
+### Control Mode (`control_mode`)
+```c
+CONTROL_MODE_CHARGE_DISCHARGE (0)  // 충방전: V_max/V_min 한계, I_cmd 제어
+CONTROL_MODE_BATTERY (1)           // 배터리: V_cmd CV 제어, I_max/I_min 한계
+```
+
+**모드 영향**:
+- Operation Mode → PI 제어 활성화, 릴레이 구성, 전류 라우팅
+- Control Mode → CLA Task 선택(1+2 vs 3), 제어 파라미터 사용
+
+**병렬 모드 동작**:
+- Master1 (CH1): PI 제어 실행 → RS485로 CH2에 지령 전달
+- Master2 (CH2): Master1 지령 수신 → 패스스루 (PI 미실행)
+- 전류 분배: 전체 전류 ÷ 2(채널) ÷ 6(모듈) = 모듈당 전류
+
+---
+
+## 시퀀스 제어
+
+`Update_System_Sequence()` 상태 머신:
 
 ```c
-MODE_STOP (0)        // System disabled
-MODE_INDIVIDUAL (1) // CH1/CH2 operate with independent current references
-MODE_PARALLEL (2)    // Upper master runs PI, lower master passes through commands
+SEQ_STEP_IDLE (0)             // Precharge 진행 중 (V_out ≈ V_batt ±2V 대기)
+SEQ_STEP_PRECHARGE_DONE (10)  // Precharge 완료, 1초 대기
+SEQ_STEP_NORMAL_RUN (20)      // 메인 릴레이 ON, 정상 운전
 ```
 
-**Control Mode** (controlled by `control_mode` enum):
+**Precharge 완료 조건**:
 ```c
-CONTROL_MODE_CHARGE_DISCHARGE (0)  // Charge/Discharge mode: V_max/V_min limits, I_cmd control
-CONTROL_MODE_BATTERY (1)           // Battery mode: V_cmd CV control, I_max/I_min limits
+if (abs(V_out_display - V_batt_display) < 2.0f)
+    sequence_step = SEQ_STEP_PRECHARGE_DONE;
 ```
 
-Mode selection affects:
-- **Operation Mode**: PI controller activation (which master runs closed-loop), relay configuration, current command routing
-- **Control Mode**: CLA task selection (Task 1+2 vs Task 3), control parameter usage (V_max/V_min vs V_cmd)
-
-### Sequence Control State Machine
-
-**Function**: `Update_System_Sequence()` in `HABA_control.c`
-
-State progression controlled by `sequence_step`:
-- **SEQ_STEP_IDLE (0)**: Precharge in progress, waiting for V_out ≈ V_batt (±2V)
-- **SEQ_STEP_PRECHARGE_DONE (10)**: Precharge complete, 1-second delay before main relay close
-- **SEQ_STEP_NORMAL_RUN (20)**: Main relay closed, normal operation
-- **Fault states**: Automatic shutdown on over-voltage/current/temperature
-
-**Precharge Logic**:
+**보호 임계값** (`HABA_globals.h:106-109`):
 ```c
-// Precharge complete when voltage difference < 2V
-if ((V_out_display - V_batt_display) < 2.0f &&
-    (V_out_display - V_batt_display) > -2.0f)
-{
-    sequence_step = SEQ_STEP_PRECHARGE_DONE;  // → Step 10
-}
+OVER_VOLTAGE: 1400V    // 배터리 시스템 최대 전압
+OVER_CURRENT: 88.0A    // 슬레이브 최대 전류 (80A + 10% 여유)
+OVER_TEMP:    120°C    // NTC 온도 한계
 ```
 
-**Protection Thresholds** (HABA_globals.h:106-109):
-```c
-OVER_VOLTAGE: 1400V   // Battery system max voltage
-OVER_CURRENT: 88.0A   // Slave module max current (80A nominal + 10% margin)
-OVER_TEMP:    120°C   // NTC temperature limit (heatsink)
-```
+⚠️ **안전 권장사항**: `docs/POWER_CONTROL_REVIEW.md` 참조
 
-⚠️ **Safety Note**: See `docs/POWER_CONTROL_REVIEW.md` for recommended protection threshold adjustments.
+---
 
-## Critical Code Sections
+## 중요 코드 섹션
 
-### RAMFUNC Placement
+### RAMFUNC 배치
 
-Performance-critical functions are placed in RAM using `#pragma CODE_SECTION`:
-
+성능 중요 함수는 RAM 배치 (Flash 대기 제거):
 ```c
 #pragma CODE_SECTION(INT_EPWM1_ISR, ".TI.ramfunc");
-#pragma CODE_SECTION(sensing_task, ".TI.ramfunc");
-#pragma CODE_SECTION(pi_control_task, ".TI.ramfunc");
+#pragma CODE_SECTION(Sensing_And_Trigger_PI, ".TI.ramfunc");
 ```
 
-This eliminates Flash wait states for 100kHz ISR execution.
+### Soft-Start 램핑
 
-### Soft-Start Ramping
+돌입 전류 방지:
+```c
+I_ss_ramp += CURRENT_LIMIT * 0.00005f;  // 20kHz 램프
+// 개별: 480A/9.6초, 병렬: 960A/19.2초
+```
 
-Current commands undergo **soft-start limiting** to prevent inrush:
+LPF 필터 (fc=1kHz, Ts=50μs):
+```c
+I_cmd_filtered = lpf_coeff_a * (I_cmd_ramped + I_cmd_prev)
+               + lpf_coeff_b * I_cmd_filtered;
+```
+
+### 전압 피드백 선택
 
 ```c
-I_ss_ramp += CURRENT_LIMIT * 0.00005f;  // 20kHz ramp rate
-if (I_ss_ramp > CURRENT_LIMIT) I_ss_ramp = CURRENT_LIMIT;
+if (sequence_step == SEQ_STEP_NORMAL_RUN)
+    V_fb = V_batt;  // 정상: 배터리 전압 제어
+else
+    V_fb = V_out;   // Precharge: 출력 전압 제어
 ```
 
-Then low-pass filtered before PI control:
+---
+
+## 하드웨어 맵핑
+
+### GPIO
+**릴레이**:
+- GPIO8: 메인 릴레이 (배터리 연결)
+- GPIO9: 병렬 연결 릴레이 (CH1↔CH2)
+
+**LED** (전면 패널):
+- GPIO46: 전원, GPIO47: 충전, GPIO42: 방전
+- GPIO43: 고장, GPIO67: 개별, GPIO68: 병렬
+
+**DIP 스위치**: GPIO36~39 (Master ID 설정)
+
+### 전압 캘리브레이션
+
+`Sensing_And_Trigger_PI()`에서 2단계 변환:
 ```c
-I_cmd_filtered = lpf_coeff_a * (I_cmd_ramped + I_cmd_prev) + lpf_coeff_b * I_cmd_filtered;
+// 1단계: ADC → 물리값
+V_out_uncal = V_out_raw_avg * VOLTAGE_ADC_SCALE - VOLTAGE_ADC_OFFSET;
+
+// 2단계: 실측 보정
+V_out = (V_out_uncal + 0.091694057f) * 0.9926000888f;
 ```
 
-Filter coefficients calculated at init: `wc=1kHz`, `Ts=50μs`
-- `lpf_coeff_a`: Forward path coefficient
-- `lpf_coeff_b`: Feedback coefficient
+**캘리브레이션 절차**:
+1. 기준 전압계로 실측
+2. 디버거에서 `V_out_uncal` 읽기
+3. 선형 회귀로 오프셋/게인 계산
+4. 상수 업데이트
 
-### Voltage Feedback Selection
+---
 
-Feedback voltage switches based on operating sequence:
+## 개발 가이드
 
+### 제어 알고리즘 수정
+
+1. **전역 변수**: `HABA_globals.h` (extern) + `HABA_globals.c` (정의)
+2. **CLA 접근 변수**: Message RAM 배치 (`Init_CPU1_CLA1()`)
+3. **ISR 함수**: `#pragma CODE_SECTION(..., ".TI.ramfunc")` 필수
+4. **네이밍**: `Pascal_Snake_Case` (예: `Update_Voltage_Sensing`)
+5. **타이밍**: 10μs ISR 예산 준수, 무거운 작업은 백그라운드로
+
+### 통신 추가
+
+- **CAN**: `Init_CANA()`에서 메일박스 확장, `RX_MSG_OBJ_COUNT` 업데이트
+- **SCADA**: `SCADA_PACKET` 구조체, `Parse_SCADA_Command()` 수정
+
+### 성능 최적화
+
+**GPIO Direct Register Access** (driverlib 대비 10배 고속):
 ```c
-if (sequence_step == 20) V_fb = V_batt;  // Normal: regulate battery side
-else V_fb = V_out;                       // Pre-charge: regulate output side
+GPIO8_SET()     // 5-10 사이클 (vs GPIO_writePin() 50-100 사이클)
+GPIO8_CLEAR()
 ```
 
-This prevents instability during contactor transitions.
-
-## Hardware Abstraction
-
-### GPIO Mapping
-
-**Status LEDs** (Front Panel):
+**타이밍 디버그** (`ENABLE_TIMING_DEBUG` 플래그):
 ```c
-LED_PWR        (46) // Power indicator
-LED_CHARGE     (47) // Charging mode
-LED_DISCHARGE  (42) // Discharging mode
-LED_FAULT      (43) // Fault condition
-LED_SINGLE     (67) // Independent mode
-LED_DUAL       (68) // Parallel mode
+#define ENABLE_TIMING_DEBUG  0  // 릴리스: 0, 디버그: 1
+
+DEBUG_ISR_START();   // GPIO90 토글 (오실로스코프로 측정)
+// ... ISR code ...
+DEBUG_ISR_END();
 ```
 
-**Relays** (controlled in Phase 3):
-- **Main Relay** (GPIO8): Battery connection, closed when `sequence_step >= SEQ_STEP_PRECHARGE_DONE`
-- **Parallel Link** (GPIO9): CH1↔CH2 parallel connection, closed only in `MODE_PARALLEL`
-- Pre-charge relay: Hardware present but control code removed (20250918)
+---
 
-**Digital Inputs**:
-GPIO36-39 used for Master ID DIP switches (directly read via `Read_Master_ID_From_DIP()`).
+## 특수 고려사항
 
-### ADC Configuration
+### CLA 프로그래밍 모델
+- C 서브셋 (포인터, stdlib 제한)
+- 독립 32비트 FPU 파이프라인
+- CPU는 CLA 레지스터 직접 접근 불가 (Message RAM 경유)
+- 비선점형 → 결정론적 실행 시간 설계
 
-**ADCA**: NTC temperature sensors (channels added 07.11)
-**FPGA SPI ADC**: Primary voltage/current sensing (higher speed, lower noise)
-
-Calibration constants in `sensing_task()`:
+### CPU2 (현재 비활성)
 ```c
-Vo_sen = (fADC_voltage_out + 0.091694057f) * 0.9926000888f;
-Vbat_sen = (fADC_voltage_Bat - 0.3058461657f) * 0.9945009708f;
+// Device_bootCPU2(...);  // 주석 처리됨
 ```
 
-### Master ID Selection
+활성화 시:
+- 별도 Linker 명령 파일
+- IPC 메시징 (CPU1↔CPU2)
+- GPIO 소유권 관리
 
-Physical hardware strapping determines if this board is "upper" or "lower" master:
-
-```c
-void Read_Master_ID_From_DIP(void); // Reads GPIO pins to determine master_id (0 or 1)
-```
-
-Affects:
-- Which master enables RS485 driver (upper only)
-- PI control authority in parallel mode
-
-## Known Issues and TODOs
-
-### From Code History Comments (Main File Header)
-
-**Verified Working** (as of 10.01):
-- EPWM3 interrupt (07.03)
-- CAN slave communication (07.07)
-- SCI/RS485 integration (07.08)
-- CLA-based PI control (07.09)
-- DAC80502 SPI (07.10)
-- NTC temperature sensing (07.11)
-- Digital I/O (07.12)
-- SCADA protocol rev 2.0 (09.11, 09.15)
-- UI data transmission fixes (09.23)
-- Sequence module updates (09.30)
-- UI channels 1-15 operation (10.01)
-
-**Pending Verification**:
-- UI channels 16-31: `while` loop validation needed (main.c:48)
-- Pre-charge relay code restoration (commented 20250918)
-
-### Debug Infrastructure
-
-Debug flags in `HABA_Ctrl.c` (disabled by default):
-```c
-_DEBUG_CAN_STATUS_ENABLE_  (0)
-_DEBUG_SCI_STATUS_ENABLE_  (0)
-_DEBUG_SPI_STATUS_ENABLE_  (0)
-_DEBUG_CLK_STATUS_ENABLE_  (0)
-```
-
-Set to `1` to populate debug variables: `debug_sysclk_freq`, `debug_can_es`, `debug_sci_rx_error`, etc.
-
-### GPIO Debug Pins
-
-ISR and task timing monitored via GPIO toggles:
-```c
-GPIO90: EPWM1 ISR execution
-GPIO91: 1ms task
-GPIO92: 10ms task
-```
-
-**Recommendation**: Wrap in `#ifdef DEBUG` for production builds.
-
-## Development Notes
-
-### When Modifying Control Algorithms
-
-1. **Shared Variables**: Add to `HABA_globals.h` with `extern`, define in `HABA_globals.c`
-2. **CLA Access**: Variables accessed by CLA must be in message RAM (see `Init_CPU1_CLA1()` in `HABA_setup.c`)
-3. **ISR Functions**: Use `#pragma CODE_SECTION(..., ".TI.ramfunc")` for time-critical code
-4. **Naming Convention**: Project uses Pascal_Snake_Case (e.g., `Update_Voltage_Sensing`, `Send_CANA_Message`) with uppercase preserved for acronyms (CAN, SPI, ADC, GPIO, etc.) and physical quantities (V, I)
-5. **Task Timing**: Respect 10μs ISR budget - offload heavy work to background loops (see performance analysis in `docs/POWER_CONTROL_REVIEW.md`)
-
-### When Adding Communication Features
-
-- **CAN**: Extend mailbox configuration in `Init_CANA()`, update `RX_MSG_OBJ_COUNT`
-- **SCID Protocol**: Modify `SCADA_PACKET` struct and `Parse_SCADA_Command()` function
-- **Timing**: SCI transmission moved from 10μs to 10/50ms to prevent ISR overruns (09.23 fix)
-
-### Calibration Procedure
-
-Voltage sensor calibration constants are empirically derived:
-1. Measure actual system voltage with calibrated reference
-2. Read raw ADC average value
-3. Update linear correction in `sensing_task()`:
-   ```c
-   Vo_sen = (raw_voltage + offset) * gain;
-   ```
-
-Current calibration follows same process in temperature/current tasks.
-
-## Special Considerations
-
-### CLA Programming Model
-
-- CLA code (`.cla` files) uses **C syntax subset** - no pointers, limited stdlib
-- CLA has **independent 32-bit floating-point pipeline** - no type promotion issues
-- CPU cannot directly access CLA registers - all communication via message RAM
-- CLA tasks are **non-preemptive** - design for deterministic execution time
-
-### Dual-Core CPU2 Usage
-
-CPU2 is **not currently active** (boot call commented out):
-```c
-// Device_bootCPU2(C1C2_BROM_BOOTMODE_BOOT_FROM_FLASH);
-```
-
-If activating CPU2:
-- Separate linker command file required
-- IPC (Inter-Processor Communication) for CPU1↔CPU2 messaging
-- Careful GPIO ownership management (shared peripheral arbitration)
-
-### Watchdog Configuration
-
-Watchdog serviced every 1ms in `INT_EPWM1_ISR`:
+### Watchdog
+1ms마다 서비스 (`INT_EPWM1_ISR`):
 ```c
 SysCtl_serviceWatchdog();
 ```
 
-Timeout configured in `Device_init()` (device library). Do not remove service calls without reconfiguring watchdog timeout.
+서비스 제거 시 타임아웃 재설정 필요.
 
-### Performance Optimization
+---
 
-**GPIO Direct Register Access (10x faster than driverlib)**
+## 문서
 
-All GPIO operations in ISR/RAMFUNC use direct register access instead of `GPIO_writePin()`:
+- **QUICK_REFERENCE.md**: 빠른 참조, 디버깅 팁
+- **PROJECT_INDEX.md**: API 레퍼런스, 함수 목록
+- **CODE_ANALYSIS_REPORT.md**: 코드 품질/보안/성능 분석
+- **POWER_CONTROL_REVIEW.md**: PI 튜닝, 안전 권장사항
+- **RS232_interface_protocol_rev4.md**: SCADA 프로토콜 명세
 
-```c
-// Fast macros defined in HABA_globals.h
-GPIO8_SET()     // Relay 8 ON  (5-10 cycles vs 50-100 cycles)
-GPIO8_CLEAR()   // Relay 8 OFF
-GPIO90_SET()    // Debug pin HIGH
-GPIO90_CLEAR()  // Debug pin LOW
-```
-
-**Performance Impact:**
-- **driverlib GPIO_writePin()**: ~50-100 cycles (~0.25-0.5μs @ 200MHz)
-- **Direct register access**: ~5-10 cycles (~0.025-0.05μs @ 200MHz)
-- **Speed improvement**: ~10x faster
-
-**Timing Debug GPIO (Conditional Compilation)**
-
-Debug GPIO toggles (GPIO 90, 91, 92) are used for oscilloscope timing measurement:
-
-- **GPIO 90**: ISR execution timing (100kHz)
-- **GPIO 91**: 1ms task timing (1kHz)
-- **GPIO 92**: 10ms task timing (100Hz)
-
-Control via `ENABLE_TIMING_DEBUG` flag in `HABA_globals.h`:
-```c
-#define ENABLE_TIMING_DEBUG     0    // 0=disabled (release), 1=enabled (debug)
-```
-
-Usage in code:
-```c
-DEBUG_ISR_START();    // Expands to GPIO90_SET() or nothing
-// ... ISR code ...
-DEBUG_ISR_END();      // Expands to GPIO90_CLEAR() or nothing
-```
-
-When **disabled** (release build):
-- Debug macros expand to empty statements
-- No overhead at all
-- Recommended for production firmware
-
-When **enabled** (debug build):
-- GPIO toggles active for timing analysis
-- Use oscilloscope to measure execution time
-- Still ~10x faster than driverlib calls
-
-## Documentation
-
-Project documentation is organized in the `docs/` folder:
-- **POWER_CONTROL_REVIEW.md**: Expert analysis of power control system (PI tuning, safety, performance)
-- **RS232_interface_protocol_rev4.md**: SCADA communication protocol specification (latest)
-- **RS232_interface_protocol_rev2.1.md**: Legacy protocol documentation
-- **System_Control.MD**: ⚠️ Outdated development notes (historical reference only)
-
-For AI-assisted development guidance, see this `CLAUDE.md` file (keep in project root).
+**추가 리소스**:
+- TI C2000Ware 문서: `/Applications/ti/C2000Ware_6_00_00_00/docs`
+- F28377D 데이터시트: TI 공식 사이트
+- DCL 가이드: `C2000Ware/libraries/control/DCL/docs`
