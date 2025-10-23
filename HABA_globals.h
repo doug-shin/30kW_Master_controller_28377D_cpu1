@@ -29,7 +29,7 @@ extern "C" {
 // 타이밍 측정용 GPIO 토글 활성화 여부
 // 0: 비활성화 (릴리스 빌드, 성능 최적화)
 // 1: 활성화 (디버깅/타이밍 측정용)
-#define ENABLE_TIMING_DEBUG     0
+#define ENABLE_TIMING_DEBUG     1
 
 //==================================================
 // GPIO 고속 액세스 매크로 (Direct Register Access)
@@ -73,12 +73,12 @@ extern "C" {
     #define DEBUG_10MS_START()   GPIO92_SET()
     #define DEBUG_10MS_END()     GPIO92_CLEAR()
 #else
-    #define DEBUG_ISR_START()    
-    #define DEBUG_ISR_END()      
-    #define DEBUG_1MS_START()    
-    #define DEBUG_1MS_END()      
-    #define DEBUG_10MS_START()   
-    #define DEBUG_10MS_END()     
+    #define DEBUG_ISR_START()    ((void)0)
+    #define DEBUG_ISR_END()      ((void)0)
+    #define DEBUG_1MS_START()    ((void)0)
+    #define DEBUG_1MS_END()      ((void)0)
+    #define DEBUG_10MS_START()   ((void)0)
+    #define DEBUG_10MS_END()     ((void)0)
 #endif
 
 //==================================================
@@ -106,7 +106,8 @@ extern "C" {
 // --- 보호 임계값 ---
 #define OVER_VOLTAGE        (1400)      // 과전압 보호 임계값 (V)
 #define OVER_CURRENT        (88.0f)     // 과전류 보호 임계값 (A)
-#define OVER_TEMP           (120)       // 과온도 보호 임계값 (°C)
+#define OVER_TEMP           (85)        // 과온도 보호 임계값 (°C) - 방열판 온도, 강제 공랭(팬×3)
+#define OVER_TEMP_WARNING   (75)        // 과온도 경고 임계값 (°C) - Derating 시작 레벨
 
 // --- 시퀀스 제어 단계 ---
 #define SEQ_STEP_IDLE               (0)     // 대기 (Precharge 준비)
@@ -558,6 +559,10 @@ extern uint16_t CANA_rxDataArray[RX_MSG_OBJ_COUNT][4];  // CAN 수신 배열
 // SCI 통신 (RS485)
 extern uint8_t scia_rs485_mm_tx_buf[4];     // SCIA RS485 Master-to-Master 송신 버퍼
 extern uint8_t scib_rs485_ms_tx_buf[4];     // SCIB RS485 Master-to-Slave 송신 버퍼
+
+// RS485 통신 모니터링 (TX FIFO 블로킹 방지)
+extern uint32_t rs485_mm_skip_cnt;          // Master-to-Master TX 스킵 카운터
+extern uint32_t rs485_ms_skip_cnt;          // Master-to-Slave TX 스킵 카운터
 
 //--------------------------------------------------
 // [14] SCADA 인터페이스

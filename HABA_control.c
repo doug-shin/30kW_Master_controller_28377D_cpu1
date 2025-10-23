@@ -325,26 +325,61 @@ void Apply_PI_And_Convert_DAC(void)
 //--------------------------------------------------
 // Phase 2: 전류 지령 전송 (RS485)
 //--------------------------------------------------
-// 운전 모드에 따라 SCIA(마스터간), SCIB(슬레이브) 전류 지령 송신
-//--------------------------------------------------
+/**
+ * @brief Phase 2 제어 태스크 (RS485 전류 지령 전송 with TX FIFO 블로킹 방지)
+ *
+ * @details 처리 흐름:
+ *          1. TX FIFO 상태 확인 (최소 4레벨 여유 필요)
+ *          2. FIFO 여유 있으면 송신, 없으면 스킵 (카운터 증가)
+ *          3. 운전 모드별 송신 대상 선택 (Master-to-Master, Master-to-Slave)
+ *
+ * @note 호출 주기: 20kHz (100kHz ISR, 5-phase rotation)
+ * @note 실행 시간: ~1.5μs (FIFO 여유 있음), 블로킹 없음
+ * @note RAM 배치: Flash 대기 시간 제거 (.TI.ramfunc)
+ *
+ * @warning TX FIFO 블로킹 방지를 위해 FIFO 상태 확인 필수
+ *          스킵 카운터(rs485_mm_skip_cnt, rs485_ms_skip_cnt) 모니터링 권장
+ */
 #pragma CODE_SECTION(Transmit_Current_Command, ".TI.ramfunc");
 void Transmit_Current_Command(void)
 {
+    // TX FIFO 상태 확인 (최소 4레벨 여유 필요)
+    // FIFO 깊이: 16레벨, 4레벨 미만 = 여유 있음
+    bool tx_ready_mm = (SCI_getTxFIFOStatus(SCIA_BASE) < SCI_FIFO_TX4);
+    bool tx_ready_ms = (SCI_getTxFIFOStatus(SCIB_BASE) < SCI_FIFO_TX4);
+
     if (operation_mode == MODE_PARALLEL)        // 병렬 운전
     {
         if (IS_CH1)                             // CH1 마스터
         {
-            Send_RS485_MM_Current(I_cmd_to_slave);      // CH2 마스터로 전송
-            Send_RS485_MS_Current(I_cmd_to_slave);      // 자기 슬레이브에 전송
+            // Master-to-Master 전송 (CH1 → CH2)
+            if (tx_ready_mm)
+                Send_RS485_MM_Current(I_cmd_to_slave);
+            else
+                rs485_mm_skip_cnt++;            // FIFO 풀, 스킵 카운터 증가
+
+            // Master-to-Slave 전송 (CH1 → Slaves)
+            if (tx_ready_ms)
+                Send_RS485_MS_Current(I_cmd_to_slave);
+            else
+                rs485_ms_skip_cnt++;            // FIFO 풀, 스킵 카운터 증가
         }
         else  // IS_CH2                         // CH2 마스터
         {
-            Send_RS485_MS_Current(I_cmd_to_slave);      // 자기 슬레이브에만 전송 (I_cmd_from_master 사용)
+            // Master-to-Slave 전송만 (CH2 → Slaves)
+            if (tx_ready_ms)
+                Send_RS485_MS_Current(I_cmd_to_slave);
+            else
+                rs485_ms_skip_cnt++;            // FIFO 풀, 스킵 카운터 증가
         }
     }
     else                                        // 개별 운전 또는 정지 모드
     {
-        Send_RS485_MS_Current(I_cmd_to_slave);          // 슬레이브에만 전송
+        // Master-to-Slave 전송만
+        if (tx_ready_ms)
+            Send_RS485_MS_Current(I_cmd_to_slave);
+        else
+            rs485_ms_skip_cnt++;                // FIFO 풀, 스킵 카운터 증가
     }
 }
 

@@ -209,6 +209,10 @@ uint16_t CANA_rxDataArray[RX_MSG_OBJ_COUNT][4] = {0};    // CAN 수신 배열
 uint8_t scia_rs485_mm_tx_buf[4] = {0x1B, 0, 0, 0x03};    // SCIA RS485 Master-to-Master 송신 버퍼
 uint8_t scib_rs485_ms_tx_buf[4] = {0x1B, 0, 0, 0x03};    // SCIB RS485 Master-to-Slave 송신 버퍼
 
+// RS485 통신 모니터링 (TX FIFO 블로킹 방지)
+uint32_t rs485_mm_skip_cnt = 0;             // Master-to-Master TX 스킵 카운터
+uint32_t rs485_ms_skip_cnt = 0;             // Master-to-Slave TX 스킵 카운터
+
 //==================================================
 // [14] SCADA 인터페이스
 //==================================================
