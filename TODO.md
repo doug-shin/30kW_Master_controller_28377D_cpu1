@@ -138,6 +138,49 @@
 - **담당**: dougshin
 - **마감**: 2025-11-10
 
+### 7-1. 슬레이브 과전력(OP) 보호 구현 (RS-232 Rev5 반영)
+- **파일**:
+  - `HABA_control.c` (Phase 3: Check_System_Safety)
+  - `HABA_control.c` (Send_Slave_Batch_To_SCADA)
+  - `HABA_globals.h`, `HABA_globals.c`
+- **설명**:
+  - RS-232 SCADA 프로토콜 Rev5에서 슬레이브 Fault 비트맵에 OP(Over Power) 추가
+  - 슬레이브는 자체 보호 장치가 있지만, 마스터에서도 전력 모니터링 필요
+  - V×I 곱으로 전력 계산하여 정격(30kW) 초과 감지
+- **구현 내용**:
+  ```c
+  // HABA_globals.h
+  #define OVER_POWER_SLAVE (35.0f)  // 30kW + 15% 여유 [kW]
+  extern float32_t V_out_slave[16];  // 슬레이브 전압 (추가 필요 시)
+  extern uint8_t over_power_slave[16];  // OP 플래그
+
+  // HABA_control.c - Phase 3 또는 슬레이브 데이터 수신 시
+  for (uint8_t id = 1; id <= 15; id++) {
+      if (!DAB_ok_slave[id]) continue;
+
+      // 전력 계산 (kW)
+      float power = fabsf(V_out_slave[id] * I_out_slave[id]) / 1000.0f;
+
+      if (power > OVER_POWER_SLAVE) {
+          over_power_slave[id] = 1;
+      } else {
+          over_power_slave[id] = 0;
+      }
+  }
+
+  // Send_Slave_Batch_To_SCADA() - OP 비트 추가
+  if (over_power_slave[slave_id]) fault |= 0x80;  // bit7
+  ```
+- **참고**:
+  - 슬레이브 전압(`V_out_slave[]`)을 CAN으로 수신하는지 확인 필요
+  - 현재는 전류(`I_out_slave[]`)와 온도만 수신
+  - V_out_slave[] 추가 또는 마스터 V_out로 근사 (병렬 모드)
+- **프로토콜 명세**: `docs/RS232_SCADA_protocol_rev5.md`
+- **예상 시간**: 2시간 (전압 데이터 확인 + 구현)
+- **담당**: dougshin
+- **마감**: 2025-11-15
+- **우선순위**: 중간 (슬레이브 자체 보호 존재, 모니터링 목적)
+
 ---
 
 ## 🟡 MEDIUM Priority
