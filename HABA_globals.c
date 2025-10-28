@@ -44,10 +44,42 @@ uint16_t  cla_cnt            = 0;       // CLA 실행 카운터 (디버그용)
 // [2] 시스템 상태 및 타이밍
 //==================================================
 
+//==================================================
+// SCADA 인터페이스 구조체 초기화
+//==================================================
+SCADA_Command_t scada_cmd = {
+    .control_mode  = CONTROL_MODE_CHARGE_DISCHARGE,
+    .cmd_ready     = 0,
+    .cmd_run       = 0,
+    .parallel_mode = 0,
+    .V_max_cmd     = 0.0f,
+    .V_min_cmd     = 0.0f,
+    .I_cmd         = 0.0f,
+    .V_cmd         = 0.0f,
+    .I_max_cmd     = 0.0f,
+    .I_min_cmd     = 0.0f
+};
+
+Master_Status_t master_status = {
+    .ready         = 0,
+    .running       = 0,
+    .precharge_ok  = 0,
+    .sequence_step = SEQ_STEP_IDLE,
+    .fault_latched = 0,
+    .over_voltage  = 0,
+    .over_current  = 0,
+    .over_temp     = 0,
+    .V_out         = 0.0f,
+    .V_batt        = 0.0f,
+    .I_out         = 0.0f
+};
+
+//==================================================
+// 시스템 제어 변수
+//==================================================
 SystemState      state              = STATE_NO_OP;      // 시스템 상태
 OperationMode_t  operation_mode     = MODE_STOP;        // 운전 모드
 uint32_t         control_phase      = 0;                // 제어 Phase (0~4)
-uint16_t         sequence_step      = 0;                // 시퀀스 단계
 uint16_t         start_stop         = 0;                // START(1) / STOP(0)
 uint32_t         run                = 0;                // 실행 플래그
 int16_t          run_switch         = 0;                // 운전 스위치 상태
@@ -108,7 +140,7 @@ float32_t I_out_raw         = 0.0f;     // 원시 출력 전류
 
 // 전류 피드백 및 평균
 float32_t I_out_avg         = 0.0f;     // 출력 전류 평균
-int16_t   I_out_ref         = 0;        // 전류 레퍼런스
+int16_t   I_cmd_scada       = 0;        // SCADA 수신 전류 지령 (충방전 모드)
 
 //==================================================
 // [6] 소프트 스타트 및 필터
@@ -182,6 +214,9 @@ uint16_t over_current_flag  = 0;        // 과전류 플래그
 uint16_t over_temp_flag     = 0;        // 과온도 플래그
 uint16_t master_fault_flag  = 0;        // 마스터 고장 플래그
 
+// 고장 래칭 메커니즘
+volatile bool fault_latched = false;    // 고장 래치 플래그 (SCADA 리셋으로만 해제)
+
 //==================================================
 // [11] 시퀀스 제어 (프리차지 등)
 //==================================================
@@ -217,20 +252,19 @@ uint32_t rs485_ms_skip_cnt = 0;             // Master-to-Slave TX 스킵 카운�
 // [14] SCADA 인터페이스
 //==================================================
 
-// SCADA 수신 버퍼 (공통)
+// SCADA 수신 버퍼
 volatile uint16_t scada_packet_ready = 0;                // 패킷 준비 플래그
-volatile uint8_t  scada_rx_buffer[SCADA_RX_BUFFER_SIZE] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00
-};
 volatile uint16_t scada_rx_index    = 0;                 // 수신 버퍼 인덱스
-uint8_t slave_tx_buffer[7]          = {0};               // 슬레이브 송신 버퍼
-uint8_t system_tx_buffer[7]         = {0};               // 시스템 송신 버퍼
+volatile uint8_t scada_rx_buffer[SCADA_PACKET_SIZE] = {0};  // SCADA 수신 버퍼 (16 bytes)
 
-// SCADA 제어 변수
+// SCADA 제어 변수 (레거시 호환성 - scada_cmd 구조체와 동기화됨)
 volatile ControlMode_t control_mode = CONTROL_MODE_CHARGE_DISCHARGE;  // 제어 모드 (초기값: 충방전)
 volatile uint8_t  ready_state   = 0;                     // Ready 상태 (bit[6], 초기값: IDLE)
 volatile uint8_t  run_state     = 0;                     // Run 상태 (bit[5], 초기값: STOP)
 volatile uint8_t  parallel_mode = 0;                     // Parallel 모드 (bit[4], 초기값: Individual)
+
+// 시퀀스 상태 변수 (레거시 호환성 - master_status.sequence_step과 동기화됨)
+volatile uint16_t sequence_step = SEQ_STEP_IDLE;         // 시퀀스 단계 (초기값: IDLE)
 
 // 배터리 모드 제어 지령
 float32_t V_cmd     = 0.0f;                              // 목표 전압 (배터리 모드 CV 제어)
@@ -318,6 +352,69 @@ volatile uint16_t debug_spi_overrun         = 0;
 volatile uint16_t debug_spi_rx_hasdata      = 0;
 volatile uint16_t debug_spi_rx_overflow     = 0;
 #endif
+
+//==================================================
+// Rev 5 프로토콜 전역 변수 정의
+//==================================================
+
+// --- Active Slave List ---
+Active_Slave_List_t active_slave_list = {
+    .slave_ids = {0},
+    .count = 0,
+    .last_updated_ms = 0
+};
+
+// --- Fault/Warning 비트맵 ---
+Slave_Status_Bitmap_t slave_status_bitmap = {
+    .fault_bitmap = 0,
+    .warning_bitmap = 0,
+    .last_fault_time_ms = 0,
+    .last_warning_time_ms = 0
+};
+
+// --- 연결 감시 ---
+Connection_Watchdog_t scada_watchdog = {
+    .last_rx_time_ms = 0,
+    .timeout_threshold_ms = 200,        // 200ms 타임아웃
+    .connection_lost = 0,
+    .reconnect_time_ms = 0
+};
+
+Connection_Watchdog_t mm_watchdog = {
+    .last_rx_time_ms = 0,
+    .timeout_threshold_ms = 5,          // 5ms 타임아웃 (20kHz 전송, 100배 여유)
+    .connection_lost = 1,               // 초기값: 연결 끊김 (수신 시 0으로 변경)
+    .reconnect_time_ms = 0
+};
+
+// --- Master-to-Master 통신 변수 ---
+MM_RxState_t mm_rx_state = MM_RX_WAIT_STX;          // 초기 상태: STX 대기
+uint8_t mm_rx_buffer[MM_MAX_FRAME_SIZE] = {0};      // 수신 버퍼
+uint8_t mm_rx_index = 0;                            // 수신 버퍼 인덱스
+uint16_t I_cmd_from_master_prev = 0;                // 이전 전류 지령
+uint8_t ch2_slave_count = 0;                        // CH2 슬레이브 개수 (초기값: 0, M2에서 수신)
+
+MM_Statistics_t mm_statistics = {
+    .tx_count = 0,
+    .rx_count = 0,
+    .crc_error_count = 0,
+    .frame_error_count = 0,
+    .spike_reject_count = 0,
+    .timeout_count = 0
+};
+
+CRC_Obj crcObj_MM;                                  // Master-to-Master CRC 객체
+CRC_Handle handleCRC_MM = &crcObj_MM;               // Master-to-Master CRC 핸들
+
+// --- Keep-Alive 토글 플래그 ---
+uint8_t keepalive_toggle = 0;
+
+// --- SCADA 송신 패킷 버퍼 ---
+System_Voltage_Packet_t system_voltage_packet = {0};
+Slave_Batch_Packet_t slave_batch_packets[2] = {0};
+
+// --- 배치 전송 인덱스 ---
+uint8_t batch_index = 0;
 
 //==================================================
 // End of HABA_globals.c

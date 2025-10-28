@@ -73,9 +73,54 @@ Source Files (프로젝트에 추가):
 HABA_main.c              시스템 엔트리 포인트 및 메인 루프
 ├── HABA_setup.c/h       하드웨어 초기화 (GPIO, PWM, CAN, SCI, SPI, ADC, CLA)
 ├── HABA_control.c/h     제어 알고리즘, 통신 핸들러, ISR
-├── HABA_globals.c/h     전역 변수, 상수, 공유 데이터
+├── HABA_globals.c/h     전역 변수, 상수, 공유 데이터, 구조체 정의
 └── HABA_cla_tasks.cla   CLA PI 제어기 (DCL 기반, 100kHz)
 ```
+
+### 데이터 구조 아키텍처 (v2.2.0+)
+
+**구조 기반 설계**: 타입 안전성과 명확한 데이터 흐름을 위한 구조체 사용
+
+```c
+// 시퀀스 상태 (타입 안전)
+typedef enum {
+    SEQ_STEP_IDLE = 0,              // Precharge 준비
+    SEQ_STEP_PRECHARGE_DONE = 10,   // Precharge 완료, 1초 대기
+    SEQ_STEP_NORMAL_RUN = 20        // 정상 운전
+} SequenceStep_t;
+
+// SCADA → Master 명령 (입력)
+typedef struct {
+    ControlMode_t control_mode;     // 제어 모드
+    uint8_t       cmd_ready;        // Precharge 시작 명령
+    uint8_t       cmd_run;          // 운전 명령
+    uint8_t       parallel_mode;    // 병렬 모드
+    float32_t     V_max_cmd, V_min_cmd, I_cmd;
+    float32_t     V_cmd, I_max_cmd, I_min_cmd;
+} SCADA_Command_t;
+
+// Master → SCADA 상태 (출력)
+typedef struct {
+    uint8_t       ready;            // Precharge 완료
+    uint8_t       running;          // 운전 중
+    uint8_t       precharge_ok;     // Precharge OK
+    SequenceStep_t sequence_step;   // 시퀀스 단계
+    uint8_t       fault_latched;    // 고장 래치
+    uint8_t       over_voltage, over_current, over_temp;
+    float32_t     V_out, V_batt, I_out;
+} Master_Status_t;
+
+// 전역 인스턴스
+extern SCADA_Command_t  scada_cmd;      // SCADA 명령
+extern Master_Status_t  master_status;  // 마스터 상태
+```
+
+**데이터 흐름**:
+```
+SCADA → scada_cmd (입력) → Master 처리 → master_status (출력) → SCADA
+```
+
+**레거시 호환성**: 기존 전역 변수와 동기화 유지
 
 ### 실시간 제어 아키텍처
 
@@ -363,11 +408,21 @@ SysCtl_serviceWatchdog();
 
 ## 문서
 
+**프로젝트 문서**:
+- **TODO.md**: 작업 추적 및 우선순위
+- **CHANGELOG.md**: 버전 이력 및 변경사항
 - **QUICK_REFERENCE.md**: 빠른 참조, 디버깅 팁
 - **PROJECT_INDEX.md**: API 레퍼런스, 함수 목록
+
+**분석 및 리뷰**:
 - **CODE_ANALYSIS_REPORT.md**: 코드 품질/보안/성능 분석
 - **POWER_CONTROL_REVIEW.md**: PI 튜닝, 안전 권장사항
-- **RS232_interface_protocol_rev4.md**: SCADA 프로토콜 명세
+- **DMA_FEASIBILITY_STUDY.md**: DMA 전환 검토
+
+**프로토콜 명세**:
+- **RS232_SCADA_protocol_rev5.md**: SCADA 프로토콜 최신 버전 (Rev 5.0)
+- **RS232_SCADA_protocol_rev4.md**: SCADA 프로토콜 이전 버전 (Rev 4.0)
+- **RS232_interface_protocol_rev2.1.md**: SCADA 프로토콜 구버전 (Rev 2.1)
 
 **추가 리소스**:
 - TI C2000Ware 문서: `/Applications/ti/C2000Ware_6_00_00_00/docs`

@@ -2,8 +2,8 @@
 
 **프로젝트명**: TI F28377D 30kW Battery Power Conversion System Master Controller
 **플랫폼**: Texas Instruments F28377D Dual-Core DSP
-**버전**: 1.0
-**최종 업데이트**: 2025년 10월 19일
+**버전**: 2.2.0
+**최종 업데이트**: 2025년 10월 27일
 
 ---
 
@@ -36,13 +36,18 @@
   - 성능 최적화 제안
 
 ### 3. 통신 프로토콜
-- **[RS232_interface_protocol_rev4.md](./RS232_interface_protocol_rev4.md)** - SCADA 통신 프로토콜 명세 (최신)
-  - 패킷 구조 (13바이트)
+- **[RS232_SCADA_protocol_rev5.md](./RS232_SCADA_protocol_rev5.md)** - SCADA 통신 프로토콜 명세 (최신, Rev 5.0)
+  - 패킷 구조 (16바이트 고정)
   - CRC-32 검증 방식
   - 제어 명령 및 상태 보고
-  - 배터리 모드 추가 (Rev 4.0)
+  - 슬레이브 배치 전송 (3개/패킷)
+  - 200ms 타임아웃, 100ms Keep-Alive
 
-- **[RS232_interface_protocol_rev2.1.md](./RS232_interface_protocol_rev2.1.md)** - 레거시 SCADA 프로토콜 (참고용)
+- **[RS232_SCADA_protocol_rev4.md](./RS232_SCADA_protocol_rev4.md)** - SCADA 프로토콜 이전 버전 (Rev 4.0)
+  - 패킷 구조 (13바이트)
+  - 배터리 모드 추가
+
+- **[RS232_interface_protocol_rev2.1.md](./RS232_interface_protocol_rev2.1.md)** - 레거시 SCADA 프로토콜 (Rev 2.1, 참고용)
 
 ### 4. 시스템 제어 (레거시)
 - **[System_Control.MD](./System_Control.MD)** - ⚠️ 구버전 개발 노트 (역사적 참고용)

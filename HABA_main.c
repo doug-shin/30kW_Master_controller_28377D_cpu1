@@ -123,8 +123,8 @@ void main(void)
         //========================
         if (scada_packet_ready)
         {
-            Parse_SCADA_Command();      // CRC 검증 + 제어 변수 업데이트
-            scada_packet_ready = 0;     // 플래그 클리어
+            Parse_SCADA_Command();     // Rev 5: CRC-32 검증 + 제어 변수 업데이트
+            scada_packet_ready = 0;         // 플래그 클리어
         }
 
         //========================
@@ -133,8 +133,14 @@ void main(void)
         if (flag_1ms)
         {
             DEBUG_1MS_START();
-            
+
             flag_1ms = 0;
+
+            // Rev 5: SCADA 연결 감시 (200ms 타임아웃 검사)
+            Update_SCADA_Watchdog();
+
+            // Master-to-Master 연결 감시 (5ms 타임아웃 검사, 병렬 모드 전용)
+            Update_MM_Watchdog();
 
             // CAN 슬레이브 제어 (Start/Stop에 따라 Buck Enable 제어)
             if (start_stop == START)
@@ -156,13 +162,14 @@ void main(void)
         if (flag_10ms)
         {
             DEBUG_10MS_START();
-            
+
             flag_10ms = false;
 
             Apply_Current_Reference_Limit();    // 시스템 상태 업데이트 (슬레이브 모니터링 + 전류 지령)
-            Send_Slave_Status_To_SCADA();       // Slave 모듈 상태 → SCADA 송신
+            Send_Slave_Batch_To_SCADA();        // Rev 5: 슬레이브 배치 전송 (3개씩)
 
             // CAN 슬레이브 상태 읽기 (최대 16개 채널)
+            // Rev 5: Read_CAN_Slave() 내부에서 Update_Active_Slave_List() 자동 호출
             for (uint16_t mbox = 1; mbox <= 16; mbox++)
             {
                 Read_CAN_Slave(mbox);
@@ -178,8 +185,22 @@ void main(void)
         {
             flag_50ms = false;
 
-            Send_System_Voltage_To_SCADA();   // 시스템 전압 → SCADA 송신
-            Read_Master_ID_From_DIP();      // Master ID 읽기 (GPIO36~39 DIP)
+            Send_System_Voltage_To_SCADA();  // Rev 5: 시스템 전압 → SCADA 송신
+            Read_Master_ID_From_DIP();            // Master ID 읽기 (GPIO36~39 DIP)
+        }
+
+        //========================
+        // 100ms 주기 작업 (Rev 5: Keep-Alive, Master-to-Master)
+        //========================
+        if (cnt_1ms % 100 == 0)
+        {
+            Send_KeepAlive_Packet();  // Rev 5: Keep-Alive 패킷 전송
+
+            // Master-to-Master: M2 → M1 슬레이브 개수 전송 (병렬 모드 전용)
+            if (operation_mode == MODE_PARALLEL && IS_CH2)
+            {
+                Send_RS485_MM_SlaveCount(active_slave_list.count);
+            }
         }
     }
 }
@@ -214,9 +235,9 @@ __interrupt void INT_EPWM1_ISR(void)
     //========================
     // PI 제어 피드백 전압 선택
     //========================
-    // sequence_step == SEQ_STEP_NORMAL_RUN (정상 운전): V_batt 피드백
+    // master_status.sequence_step == SEQ_STEP_NORMAL_RUN (정상 운전): V_batt 피드백
     // 그 외 (프리차징 등): V_out 피드백
-    if (sequence_step == SEQ_STEP_NORMAL_RUN)
+    if (master_status.sequence_step == SEQ_STEP_NORMAL_RUN)
         V_fb = V_batt;
     else
         V_fb = V_out;

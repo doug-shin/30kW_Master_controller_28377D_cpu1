@@ -8,27 +8,114 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
-### TODO - Critical
-- 고장 래칭 메커니즘 추가 (간헐적 고장 방지)
-
 ### TODO - High Priority
 - PI 게인 재튜닝 검증 (DCL 전환 후 안정성 확인)
-- CH2 전류 지령 수신 타임아웃 체크 (병렬 모드 안전성)
 - NTC 온도 센싱 구현 (ADC 기반)
 - 과전류 임계값 마진 확보 (88A → 96A)
 - Battery Mode CV 제어 튜닝
+- 마스터 고장 정보 SCADA 피드백 추가
+- 슬레이브 과전력(OP) 보호 구현
 
 ### TODO - Medium Priority
 - RS485 스킵 카운터 모니터링
 - 병렬 모드 채널간 전류 불균형 모니터링
 - RS485 DMA 전환 (성능 최적화)
 - 프리차징 릴레이 복구
+- 개별 모드 Master-to-Master 제어 구현 (M1→M2 통신 확장)
 
 ### TODO - Low Priority
 - Magic Number 제거 (코드 품질)
 - 복잡한 함수 리팩토링 (유지보수성)
-- 전역 변수 구조체 그룹화
 - CAN 슬레이브 16~31 지원
+
+---
+
+## [2.3.0] - 2025-10-28
+
+### Added
+- **Master-to-Master 프로토콜 Rev 1.0 (병렬 모드 전용)**
+  - CRC-32 검증 (VCU2 하드웨어 가속, ~0.5μs)
+  - STX + ETX + 고정 바이트 수 프레임 동기화
+  - 5ms 타임아웃 감시 (`Update_MM_Watchdog()`)
+  - 스파이크 거부 (±30% 변화량 필터링)
+  - 통신 통계 추적 (`MM_Statistics_t`)
+
+- **양방향 Master-to-Master 통신**
+  - M1 → M2: 전류 지령 (20kHz, Phase 2)
+  - M2 → M1: 슬레이브 개수 전송 (100ms, 병렬 모드)
+  - `Send_RS485_MM_SlaveCount()` 함수 추가
+
+- **상태 머신 기반 수신 ISR**
+  - `SCIA_RS485_MM_Rx_ISR()` 완전 재작성
+  - `MM_RxState_t` enum (WAIT_STX, RECEIVING)
+  - 프레임 타입 자동 감지 (전류 vs 슬레이브 개수)
+
+### Changed
+- **동적 슬레이브 개수 기반 전류 분배**
+  - 개별 모드: `I_total / active_slave_list.count`
+  - 병렬 모드: 가중 분배 (CH1/CH2 슬레이브 비율 반영)
+  - 예시: CH1=6, CH2=4, 480A → 양쪽 모두 48A/모듈 (균등)
+
+- **Precharge 전류 수정**
+  - 기존: 2A 시스템 전류 (모듈당 0.33A)
+  - 수정: 2A/모듈 × 슬레이브 개수
+  - 개별 모드 6모듈: 12A, 병렬 모드 12모듈: 24A
+
+### Fixed
+- **병렬 모드 채널간 전류 불균형 해결**
+  - M2 슬레이브 개수 미전달로 인한 고정 분배 문제 해결
+  - 동적 가중 분배로 실시간 균등 부하 분배 달성
+
+- **Master-to-Master 통신 신뢰성 강화**
+  - CRC 오류 자동 거부 (통계 카운터 증가)
+  - 타임아웃 시 안전 정지 (I_cmd = 0, IDLE 전환)
+  - 프레임 동기화 오류 복구 (STX 대기 상태로 리셋)
+
+---
+
+## [2.2.0] - 2025-10-27
+
+### Added
+- **구조 기반 아키텍처 (Structure-Based Architecture)**
+  - `SequenceStep_t` enum 추가 (타입 안전성 향상)
+  - `SCADA_Command_t` 구조체: SCADA → Master 명령 입력
+    - `cmd_ready`, `cmd_run`, `control_mode`, `parallel_mode`
+    - `V_max_cmd`, `V_min_cmd`, `I_cmd`, `V_cmd`, `I_max_cmd`, `I_min_cmd`
+  - `Master_Status_t` 구조체: Master → SCADA 상태 출력
+    - `ready`, `running`, `precharge_ok`, `sequence_step`
+    - `fault_latched`, `over_voltage`, `over_current`, `over_temp`
+    - `V_out`, `V_batt`, `I_out`
+  - 레거시 변수 동기화 코드 유지 (하위 호환성)
+
+- **고장 래칭 메커니즘**
+  - `master_status.fault_latched` 플래그 추가
+  - 고장 발생 시 `run = 0` 강제 설정 (즉시 정지)
+  - IDLE 상태 전환 시 자동 리셋 (프리차지 전압 보존)
+  - STOP 상태 유지로 빠른 재시작 지원
+
+### Changed
+- **7개 함수 구조체 마이그레이션**
+  - `Parse_SCADA_Command()`: `scada_cmd` 구조체 사용
+  - `Update_SCADA_Watchdog()`: `scada_cmd` 초기화
+  - `Update_System_Sequence()`: `master_status` 상태 관리
+  - `Check_Fault()`: `master_status` 고장 플래그
+  - `Sensing_And_Trigger_PI()`: `scada_cmd.control_mode` 사용
+  - `Apply_PI_And_Convert_DAC()`: `scada_cmd` 파라미터 사용
+  - `INT_EPWM1_ISR()`: `master_status.sequence_step` 사용
+
+### Improved
+- **데이터 흐름 명확화**
+  - Input (scada_cmd) vs Output (master_status) 명확한 분리
+  - `ready_state` 역할 개선: `cmd_ready` (명령) vs `ready` (상태)
+  - 타입 안전성: enum 사용으로 오타 방지
+  - 유지보수성: 관련 변수 그룹화, 코드 가독성 향상
+
+### Removed
+- **임시 문서 삭제 (문서 정리)**
+  - `docs/IMPROVEMENT_CHECKLIST.md` (TODO.md와 중복)
+  - `docs/SAFETY_AND_SEQUENCE_ANALYSIS.md` (모든 이슈 해결 완료)
+  - `docs/REV5_IMPLEMENTATION_PLAN.md` (구현 완료)
+  - 최종 문서 9개로 정리
 
 ---
 

@@ -18,6 +18,7 @@
 #include <math.h>
 #include "DCL.h"                       // DCL (Digital Control Library) - CPU + CLA
 #include "DCLCLA.h"                    // DCL CLA-specific functions
+#include "vcu2/vcu2_crc.h"             // VCU2 CRC 하드웨어 가속 (CRC_Obj, CRC_Handle)
 
 #ifdef __cplusplus
 extern "C" {
@@ -109,10 +110,12 @@ extern "C" {
 #define OVER_TEMP           (85)        // 과온도 보호 임계값 (°C) - 방열판 온도, 강제 공랭(팬×3)
 #define OVER_TEMP_WARNING   (75)        // 과온도 경고 임계값 (°C) - Derating 시작 레벨
 
-// --- 시퀀스 제어 단계 ---
-#define SEQ_STEP_IDLE               (0)     // 대기 (Precharge 준비)
-#define SEQ_STEP_PRECHARGE_DONE     (10)    // Precharge 완료, 메인 릴레이 대기 (1초)
-#define SEQ_STEP_NORMAL_RUN         (20)    // 정상 운전 (메인 릴레이 ON)
+// --- 시퀀스 제어 단계 (Enum으로 타입 안전성 강화) ---
+typedef enum {
+    SEQ_STEP_IDLE = 0,              // 대기 (Precharge 준비, SCADA cmd_ready=0)
+    SEQ_STEP_PRECHARGE_DONE = 10,   // Precharge 완료, 메인 릴레이 대기 (1초)
+    SEQ_STEP_NORMAL_RUN = 20        // 정상 운전 (메인 릴레이 ON, SCADA cmd_run=1)
+} SequenceStep_t;
 
 // --- 타이밍 상수 (20kHz 기준) ---
 #define TIMING_1SEC_AT_20KHZ        (20000)     // 1초 = 20kHz × 20000
@@ -150,9 +153,17 @@ extern "C" {
 #define VOLTAGE_TEST_MAX            (5000)      // 전압 테스트 최대값 (500.0V)
 
 // --- SCADA 프로토콜 상수 ---
-#define SCADA_PACKET_SIZE           (13)        // SCADA 패킷 크기 (바이트)
-#define SCADA_SLAVE_PACKET_SIZE     (7)         // 슬레이브 상태 패킷 크기
-#define SCADA_MAX_SLAVES            (15)        // SCADA 송신 최대 슬레이브 수
+#define SCADA_PACKET_SIZE       (16)        // SCADA 수신 패킷 크기 (16 bytes 고정)
+#define SCADA_SLAVE_PACKET_SIZE (16)        // 슬레이브 배치 패킷 크기 (16 bytes)
+#define SCADA_PAYLOAD_SIZE      (14)        // Payload 크기 (STX/ETX 제외)
+#define SCADA_SLAVES_PER_PACKET (3)         // 배치 전송 슬레이브 수 (3개/패킷)
+#define SCADA_MAX_SLAVES        (6)         // Active Slave List 최대 6개
+
+// 하위 호환성 (deprecated)
+#define REV5_PACKET_SIZE        SCADA_PACKET_SIZE
+#define REV5_PAYLOAD_SIZE       SCADA_PAYLOAD_SIZE
+#define REV5_SLAVES_PER_PACKET  SCADA_SLAVES_PER_PACKET
+#define REV5_MAX_ACTIVE_SLAVES  SCADA_MAX_SLAVES
 
 // --- 전압 차이 임계값 (Precharge) ---
 #define PRECHARGE_VOLTAGE_DIFF_OK   (2.0f)      // Precharge 완료 판정 전압 차 (±2V)
@@ -322,6 +333,57 @@ typedef enum {
     CONTROL_MODE_BATTERY          = 1   // 배터리 모드 (bit[7]=1): V_cmd CV 제어, I_max/I_min 제한
 } ControlMode_t;
 
+//==================================================
+// SCADA 인터페이스 구조체
+//==================================================
+
+/**
+ * @brief SCADA 명령 구조체 (SCADA → Master)
+ *
+ * SCADA가 마스터에게 내리는 명령들을 포함
+ * Parse_SCADA_Command()에서 수신 패킷을 파싱하여 이 구조체에 저장
+ */
+typedef struct {
+    // Command byte (SCADA → Master 명령)
+    ControlMode_t control_mode;     // bit[7]: 제어 모드 (0=Charge/Discharge, 1=Battery)
+    uint8_t       cmd_ready;        // bit[6]: Ready 명령 (0=IDLE, 1=READY - Precharge 시작하라)
+    uint8_t       cmd_run;          // bit[5]: Run 명령 (0=STOP, 1=RUN - 정상 운전)
+    uint8_t       parallel_mode;    // bit[4]: 병렬 모드 (0=Individual, 1=Parallel)
+
+    // Parameters (제어 변수 - 모드에 따라 의미 다름)
+    float32_t     V_max_cmd;        // 충전 최대 전압 (충방전 모드)
+    float32_t     V_min_cmd;        // 방전 최소 전압 (충방전 모드)
+    float32_t     I_cmd;            // 전류 지령 (충방전 모드)
+    float32_t     V_cmd;            // 전압 지령 (배터리 모드 CV)
+    float32_t     I_max_cmd;        // 최대 전류 제한 (배터리 모드)
+    float32_t     I_min_cmd;        // 최소 전류 제한 (배터리 모드)
+} SCADA_Command_t;
+
+/**
+ * @brief 마스터 상태 구조체 (Master → SCADA)
+ *
+ * 마스터의 현재 상태를 SCADA로 피드백하기 위한 구조체
+ * Send_System_Status_To_SCADA()에서 이 구조체를 패킷으로 변환하여 송신
+ */
+typedef struct {
+    // 시퀀스 상태 (마스터가 현재 상태 알려줌)
+    uint8_t       ready;            // Precharge 완료 여부 (0=IDLE, 1=READY)
+    uint8_t       running;          // 운전 중 여부 (0=STOP, 1=RUN)
+    uint8_t       precharge_ok;     // Precharge 완료 플래그 (1=완료, V_out ≈ V_batt)
+    SequenceStep_t sequence_step;   // 현재 시퀀스 단계 (IDLE/PRECHARGE_DONE/NORMAL_RUN)
+
+    // 고장 상태 (마스터 자체 고장)
+    uint8_t       fault_latched;    // 고장 래치 플래그 (1=고장 발생, IDLE로 리셋 가능)
+    uint8_t       over_voltage;     // 과전압 플래그 (V_out ≥ 1400V)
+    uint8_t       over_current;     // 과전류 플래그 (|I_out| ≥ 88A)
+    uint8_t       over_temp;        // 과온도 플래그 (NTC ≥ 85°C)
+
+    // 측정값 (디스플레이용 - 캘리브레이션 적용)
+    float32_t     V_out;            // 출력 전압 (V)
+    float32_t     V_batt;           // 배터리 전압 (V)
+    float32_t     I_out;            // 출력 전류 (A)
+} Master_Status_t;
+
 // --- 시스템 상태 ---
 typedef enum {
     STATE_NO_OP,            // 동작 없음
@@ -347,31 +409,143 @@ typedef enum {
 #define SCADA_RX_BUFFER_SIZE            10
 #define Rack_Channel                    0       // 랙 번호 (0~3)
 
-// SCADA 수신 패킷 구조 (13 bytes):
-//   [STX][CMD][Param1_H][Param1_L][Param2_H][Param2_L][Param3_H][Param3_L][CRC32_3][CRC32_2][CRC32_1][CRC32_0][ETX]
-//   구조체 없이 scada_rx_buffer[] 배열에서 직접 파싱
+//==================================================
+// SCADA 프로토콜 구조체
+//==================================================
 
-// --- 시스템 전압 송신 패킷 (Master → SCADA) ---
+// --- SCADA → Master 수신 패킷 (16 bytes) ---
+#pragma pack(1)
 typedef struct
 {
-    uint8_t stx;            // 0x02
-    uint8_t id;             // ID + Channel
-    int16_t systemVoltage;  // 시스템 전압 (Big-endian, ÷10)
-    uint8_t reserved;       // 예약
-    uint8_t checksum;       // Sum(Byte1~4) & 0xFF
-    uint8_t etx;            // 0x03
-} SYSTEM_TX_PACKET;
+    uint8_t     stx;                // [0] STX (0x02)
+    uint8_t     cmd;                // [1] Command byte
+    int16_t     param1;             // [2-3] Parameter 1 (Big-endian)
+    int16_t     param2;             // [4-5] Parameter 2
+    int16_t     param3;             // [6-7] Parameter 3
+    uint8_t     reserved[3];        // [8-10] Reserved (미래 확장)
+    uint32_t    crc32;              // [11-14] CRC-32 (Big-endian)
+    uint8_t     etx;                // [15] ETX (0x03)
+} SCADA_RxPacket_t;
+#pragma pack()
 
-// --- 슬레이브 데이터 송신 패킷 (Master → SCADA) ---
+// --- Master → SCADA 송신 패킷: 시스템 전압 (16 bytes) ---
+#pragma pack(1)
 typedef struct
 {
-    uint8_t stx;            // 0x02
-    uint8_t idAndStatus;    // bit[7:3]: Slave ID, bit[0]: DAB_OK
-    int16_t slaveCurrent;   // 슬레이브 전류 (Big-endian, Center=32768)
-    uint8_t slaveTemp;      // 슬레이브 온도 (×0.5)
-    uint8_t checksum;       // Sum(Byte1~4) & 0xFF
-    uint8_t etx;            // 0x03
-} SLAVE_TX_PACKET;
+    uint8_t     stx;                // [0] STX
+    uint8_t     id_channel;         // [1] Master ID (bit[7:3]) + Rack_Ch (bit[2:0])
+    int16_t     voltage;            // [2-3] 전압 (0.1V 단위, Big-endian)
+    uint8_t     reserved[10];       // [4-13] Reserved
+    uint8_t     checksum;           // [14] Sum Checksum
+    uint8_t     etx;                // [15] ETX
+} System_Voltage_Packet_t;
+#pragma pack()
+
+// --- Master → SCADA 송신 패킷: 슬레이브 배치 (16 bytes) ---
+#pragma pack(1)
+typedef struct
+{
+    uint8_t     stx;                // [0] STX
+
+    // Slave 1
+    uint8_t     id1_status;         // [1] ID (bit[7:3]) + Status (bit[2:0])
+    int16_t     current1;           // [2-3] 전류 (0.01A 단위, Big-endian)
+    uint8_t     temp1;              // [4] 온도 (0.5℃ 단위)
+
+    // Slave 2
+    uint8_t     id2_status;         // [5] ID + Status
+    int16_t     current2;           // [6-7] 전류
+    uint8_t     temp2;              // [8] 온도
+
+    // Slave 3
+    uint8_t     id3_status;         // [9] ID + Status
+    int16_t     current3;           // [10-11] 전류
+    uint8_t     temp3;              // [12] 온도
+
+    uint8_t     reserved;           // [13] Reserved
+    uint8_t     checksum;           // [14] Sum Checksum
+    uint8_t     etx;                // [15] ETX
+} Slave_Batch_Packet_t;
+#pragma pack()
+
+// --- Active Slave List 구조체 ---
+typedef struct
+{
+    uint8_t     slave_ids[REV5_MAX_ACTIVE_SLAVES];  // 활성 슬레이브 ID 목록 (1~15)
+    uint8_t     count;                               // 현재 활성 슬레이브 수 (0~6)
+    uint32_t    last_updated_ms;                     // 마지막 업데이트 타임스탬프 (ms)
+} Active_Slave_List_t;
+
+// --- 슬레이브 Fault/Warning 비트맵 ---
+typedef struct
+{
+    uint16_t    fault_bitmap;           // Fault 플래그 (bit 0~15 = Slave ID 1~16)
+    uint16_t    warning_bitmap;         // Warning 플래그
+    uint32_t    last_fault_time_ms;     // 마지막 Fault 발생 시각
+    uint32_t    last_warning_time_ms;   // 마지막 Warning 발생 시각
+} Slave_Status_Bitmap_t;
+
+// --- 연결 감시 구조체 ---
+typedef struct
+{
+    uint32_t    last_rx_time_ms;        // 마지막 수신 시각 (ms)
+    uint32_t    timeout_threshold_ms;   // 타임아웃 임계값 (ms)
+    uint8_t     connection_lost;        // 연결 끊김 플래그 (0=정상, 1=타임아웃)
+    uint32_t    reconnect_time_ms;      // 재연결 시각 (타임아웃 복구 시)
+} Connection_Watchdog_t;
+
+//==================================================
+// Master-to-Master 통신 프로토콜 (Rev 1.0)
+//==================================================
+
+// --- Master-to-Master 명령 타입 ---
+typedef enum {
+    MM_CMD_CURRENT      = 0x01,  // 전류 지령 (M1 → M2, 병렬 모드)
+    MM_CMD_SLAVE_COUNT  = 0x02,  // 슬레이브 개수 (M2 → M1, 병렬 모드)
+    MM_CMD_RESERVED_1   = 0x03,  // 예약 (향후 확장)
+    MM_CMD_RESERVED_2   = 0x04   // 예약 (향후 확장)
+} MM_CommandType_t;
+
+// --- Master-to-Master 수신 상태 ---
+typedef enum {
+    MM_RX_WAIT_STX      = 0,     // STX 대기
+    MM_RX_RECEIVING     = 1,     // 데이터 수신 중
+    MM_RX_COMPLETE      = 2      // 수신 완료 (예약)
+} MM_RxState_t;
+
+// --- Master-to-Master 프레임 크기 ---
+#define MM_FRAME_SIZE_CURRENT       9    // 전류 지령 프레임: [STX][CMD][Data_L][Data_H][CRC32(4)][ETX]
+#define MM_FRAME_SIZE_SLAVE_COUNT   8    // 슬레이브 개수 프레임: [STX][CMD][Count][CRC32(4)][ETX]
+#define MM_MAX_FRAME_SIZE           9    // 최대 프레임 크기
+
+// --- Master-to-Master 전류 지령 프레임 구조체 (M1 → M2) ---
+// 주의: TI C2000 컴파일러는 기본적으로 packed 구조체 사용 (pragma pack 불필요)
+typedef struct {
+    uint8_t     stx;            // 0x02 (STX)
+    uint8_t     cmd;            // 0x01 (MM_CMD_CURRENT)
+    uint16_t    current;        // 전류 지령 (DAC 코드, Little-endian)
+    uint32_t    crc32;          // CRC-32 (Byte 1~3, Little-endian)
+    uint8_t     etx;            // 0x03 (ETX)
+} MM_CurrentFrame_t;
+
+// --- Master-to-Master 슬레이브 개수 프레임 구조체 (M2 → M1) ---
+typedef struct {
+    uint8_t     stx;            // 0x02 (STX)
+    uint8_t     cmd;            // 0x02 (MM_CMD_SLAVE_COUNT)
+    uint8_t     count;          // 슬레이브 개수 (0~6)
+    uint32_t    crc32;          // CRC-32 (Byte 1~2, Little-endian)
+    uint8_t     etx;            // 0x03 (ETX)
+} MM_SlaveCountFrame_t;
+
+// --- Master-to-Master 통신 통계 ---
+typedef struct {
+    uint32_t    tx_count;           // 송신 프레임 수
+    uint32_t    rx_count;           // 수신 프레임 수 (정상)
+    uint32_t    crc_error_count;    // CRC 에러 수
+    uint32_t    frame_error_count;  // 프레임 에러 수 (STX/ETX 불일치)
+    uint32_t    spike_reject_count; // 급격한 변화 거부 수
+    uint32_t    timeout_count;      // 타임아웃 발생 수
+} MM_Statistics_t;
 
 //==================================================
 // 디버그 플래그 (조건부 컴파일)
@@ -421,10 +595,18 @@ extern uint16_t  cla_cnt;              // CLA 실행 카운터 (디버그용)
 // [2] 시스템 상태 및 타이밍
 //--------------------------------------------------
 
+//==================================================
+// SCADA 인터페이스 전역 변수
+//==================================================
+extern SCADA_Command_t  scada_cmd;          // SCADA 명령 (SCADA → Master)
+extern Master_Status_t  master_status;      // 마스터 상태 (Master → SCADA)
+
+//==================================================
+// 시스템 제어 변수
+//==================================================
 extern SystemState      state;              // 시스템 상태
 extern OperationMode_t  operation_mode;     // 운전 모드
 extern uint32_t         control_phase;      // 제어 Phase (0~4)
-extern uint16_t         sequence_step;      // 시퀀스 단계
 extern uint16_t         start_stop;         // START(1) / STOP(0)
 extern uint32_t         run;                // 실행 플래그
 extern int16_t          run_switch;         // 운전 스위치 상태
@@ -485,7 +667,7 @@ extern float32_t I_out_raw;                 // 원시 출력 전류
 
 // 전류 피드백 및 평균
 extern float32_t I_out_avg;                 // 출력 전류 평균
-extern int16_t   I_out_ref;                 // 전류 레퍼런스
+extern int16_t   I_cmd_scada;               // SCADA 수신 전류 지령 (충방전 모드)
 
 //--------------------------------------------------
 // [6] 소프트 스타트 및 필터
@@ -532,6 +714,9 @@ extern uint16_t over_current_flag;          // 과전류 플래그
 extern uint16_t over_temp_flag;             // 과온도 플래그
 extern uint16_t master_fault_flag;          // 마스터 고장 플래그
 
+// 고장 래칭 메커니즘
+extern volatile bool fault_latched;         // 고장 래치 플래그 (SCADA 리셋으로만 해제)
+
 //--------------------------------------------------
 // [11] 시퀀스 제어 (프리차지 등)
 //--------------------------------------------------
@@ -568,18 +753,19 @@ extern uint32_t rs485_ms_skip_cnt;          // Master-to-Slave TX 스킵 카운�
 // [14] SCADA 인터페이스
 //--------------------------------------------------
 
-// SCADA 수신 버퍼 (공통)
+// SCADA 수신 버퍼
 extern volatile uint16_t scada_packet_ready;            // 패킷 준비 플래그
-extern volatile uint8_t  scada_rx_buffer[SCADA_RX_BUFFER_SIZE];  // SCADA 수신 버퍼
 extern volatile uint16_t scada_rx_index;                // 수신 버퍼 인덱스
-extern uint8_t slave_tx_buffer[7];                      // 슬레이브 송신 버퍼
-extern uint8_t system_tx_buffer[7];                     // 시스템 송신 버퍼
+extern volatile uint8_t scada_rx_buffer[SCADA_PACKET_SIZE];  // SCADA 수신 버퍼 (16 bytes)
 
-// SCADA 제어 변수
+// SCADA 제어 변수 (레거시 호환성 - scada_cmd 구조체와 동기화됨)
 extern volatile ControlMode_t control_mode;             // 제어 모드 (충방전/배터리)
 extern volatile uint8_t  ready_state;                   // Ready 상태 (bit[6])
 extern volatile uint8_t  run_state;                     // Run 상태 (bit[5])
 extern volatile uint8_t  parallel_mode;                 // Parallel 모드 (bit[4])
+
+// 시퀀스 상태 변수 (레거시 호환성 - master_status.sequence_step과 동기화됨)
+extern volatile uint16_t sequence_step;                 // 시퀀스 단계 (IDLE/PRECHARGE_DONE/NORMAL_RUN)
 
 // 배터리 모드 제어 지령
 extern float32_t V_cmd;                                 // 목표 전압 (배터리 모드 CV 제어)
@@ -588,6 +774,40 @@ extern float32_t I_min_cmd;                             // 최소 전류 제한 
 
 // CRC 검증
 extern uint32_t scada_crc_error_cnt;                    // CRC 에러 카운터
+
+//--------------------------------------------------
+// [14-1] Rev 5 프로토콜 전역 변수
+//--------------------------------------------------
+
+// --- Active Slave List ---
+extern Active_Slave_List_t      active_slave_list;
+
+// --- Fault/Warning 비트맵 ---
+extern Slave_Status_Bitmap_t    slave_status_bitmap;
+
+// --- 연결 감시 ---
+extern Connection_Watchdog_t    scada_watchdog;
+extern Connection_Watchdog_t    mm_watchdog;        // Master-to-Master 연결 감시
+
+// --- Master-to-Master 통신 변수 ---
+extern MM_RxState_t             mm_rx_state;        // 수신 상태 머신
+extern uint8_t                  mm_rx_buffer[MM_MAX_FRAME_SIZE];  // 수신 버퍼
+extern uint8_t                  mm_rx_index;        // 수신 버퍼 인덱스
+extern uint16_t                 I_cmd_from_master_prev;  // 이전 전류 지령 (급격한 변화 감지용)
+extern uint8_t                  ch2_slave_count;    // CH2 슬레이브 개수 (M1이 수신)
+extern MM_Statistics_t          mm_statistics;      // Master-to-Master 통신 통계
+extern CRC_Obj                  crcObj_MM;          // Master-to-Master CRC 객체
+extern CRC_Handle               handleCRC_MM;       // Master-to-Master CRC 핸들
+
+// --- Keep-Alive 토글 플래그 ---
+extern uint8_t                  keepalive_toggle;
+
+// --- SCADA 송신 패킷 버퍼 ---
+extern System_Voltage_Packet_t  system_voltage_packet;
+extern Slave_Batch_Packet_t     slave_batch_packets[2];  // 6개 슬레이브 → 2패킷
+
+// --- 배치 전송 인덱스 ---
+extern uint8_t                  batch_index;              // 현재 배치 인덱스 (0~1)
 
 //--------------------------------------------------
 // [15] 클럭 정보

@@ -54,7 +54,8 @@ void Read_FPGA_Data(void);                      // FPGA ADC 데이터 읽기 (SP
 // [5] RS485 통신 (전류 지령 전송)
 //==================================================
 
-void Send_RS485_MM_Current(uint16_t current);       // SCIA RS485: Master-to-Master 전류 지령
+void Send_RS485_MM_Current(uint16_t current);       // SCIA RS485: Master-to-Master 전류 지령 (M1 → M2)
+void Send_RS485_MM_SlaveCount(uint8_t count);       // SCIA RS485: Master-to-Master 슬레이브 개수 (M2 → M1)
 void Send_RS485_MS_Current(uint16_t current);       // SCIB RS485: Master-to-Slave 전류 지령
 
 //==================================================
@@ -68,9 +69,18 @@ void Read_Master_ID_From_DIP(void);             // Master ID 읽기 (GPIO36~39 D
 // [7] SCADA 통신 (SCID 프로토콜)
 //==================================================
 
-void Parse_SCADA_Command(void);                 // SCADA 패킷 파싱 (CRC-32)
-void Send_Slave_Status_To_SCADA(void);          // 슬레이브 상태 → SCADA 송신
-void Send_System_Voltage_To_SCADA(void);        // 시스템 전압 → SCADA 송신
+// Active Slave List 관리
+void Update_Active_Slave_List(uint8_t slave_id);    // CAN 수신 시 슬레이브 ID 추가
+
+// 패킷 송수신
+void Parse_SCADA_Command(void);                     // SCADA 패킷 파싱 (CRC-32)
+void Send_Slave_Batch_To_SCADA(void);               // 슬레이브 배치 패킷 송신 (3개씩)
+void Send_System_Voltage_To_SCADA(void);            // 시스템 전압 송신 (16 bytes)
+void Send_KeepAlive_Packet(void);                   // Keep-Alive 100ms 주기 전송
+
+// 연결 감시
+void Update_SCADA_Watchdog(void);                   // SCADA 200ms 타임아웃 감지
+void Update_MM_Watchdog(void);                      // Master-to-Master 5ms 타임아웃 감지 (병렬 모드 전용)
 
 //==================================================
 // [8] 인터럽트 서비스 루틴 (ISR)
@@ -92,6 +102,9 @@ void Debug_CLK_Status(void);                    // 클럭 상태 디버그
 void Debug_CAN_Status(void);                    // CAN 상태 디버그
 void Debug_SCI_Status(void);                    // SCI 상태 디버그
 void Debug_SPI_Status(void);                    // SPI 상태 디버그
+
+// Fault/Warning 비트맵
+void Clear_Slave_Status_Bitmap(void);                   // Fault/Warning 비트맵 클리어
 
 #ifdef __cplusplus
 }

@@ -1,7 +1,8 @@
 # 30kW Master Controller 빠른 참조 가이드
 
 **대상**: 신규 개발자, 긴급 디버깅, 빠른 코드 탐색
-**최종 업데이트**: 2025년 10월 19일
+**최종 업데이트**: 2025년 10월 27일
+**버전**: 2.2.0
 
 ---
 
@@ -194,13 +195,24 @@ I_cmd_filtered  // LPF 필터 출력 (A)
 I_cmd_to_slave  // DAC 출력값 (0~65535)
 ```
 
-### 제어 모드
+### 제어 모드 (v2.2.0+ 구조체 기반)
 ```c
+// 구조체 (SCADA 명령 입력)
+scada_cmd.control_mode   // CHARGE_DISCHARGE(0), BATTERY(1)
+scada_cmd.cmd_ready      // Precharge 시작 명령
+scada_cmd.cmd_run        // 운전 명령
+scada_cmd.parallel_mode  // 병렬 모드
+
+// 구조체 (마스터 상태 출력)
+master_status.sequence_step   // SEQ_STEP_IDLE(0), PRECHARGE_DONE(10), NORMAL_RUN(20)
+master_status.ready           // Precharge 완료
+master_status.running         // 운전 중
+master_status.fault_latched   // 고장 래치
+
+// 레거시 변수 (하위 호환성)
 operation_mode  // MODE_STOP(0), MODE_INDIVIDUAL(1), MODE_PARALLEL(2)
-control_mode    // CHARGE_DISCHARGE(0), BATTERY(1)
-sequence_step   // 0=대기, 10=Precharge 완료, 20=정상 운전
-start_stop      // START(1), STOP(0)
-run             // 실행 플래그 (비상 정지 스위치 반영)
+sequence_step   // 레거시 (master_status와 동기화)
+run             // 실행 플래그 (비상 정지 스위치 + 고장 래치)
 ```
 
 ### PI 제어기 (CLA 공유)
@@ -220,6 +232,11 @@ I_out_slave[31]     // 슬레이브 전류 (A)
 temp_slave_raw[31]  // 슬레이브 온도 (원시값)
 DAB_ok_slave[31]    // DAB OK 플래그
 can_rx_fault_cnt[31] // CAN 수신 고장 카운터 (>10000이면 고장)
+
+// Rev5 Active Slave List (동적 관리)
+active_slave_list.count        // 실제 연결된 슬레이브 개수 (0~6)
+active_slave_list.slave_ids[]  // 활성 슬레이브 ID 배열
+active_slave_list.last_updated_ms  // 마지막 업데이트 시간
 ```
 
 ---

@@ -1,10 +1,94 @@
 # TODO List - 30kW Master Controller
 
-> 마지막 업데이트: 2025-10-20
+> 마지막 업데이트: 2025-10-28
 
 ## ✅ 완료된 CRITICAL 항목
 
-### ~~1. 과온도 임계값 긴급 수정~~ ✅ 완료 (2025-10-20)
+### ~~1. 구조 기반 아키텍처 마이그레이션 (Structure-Based Architecture)~~ ✅ 완료 (2025-10-27)
+- **파일**:
+  - `HABA_globals.h:113-117, 345-384, 547-548, 713-714`
+  - `HABA_globals.c:50-75, 266-267`
+  - `HABA_control.c:515-569, 813-967, 1441-1533`
+  - `HABA_main.c:231`
+- **완료 내용**:
+  - **SequenceStep_t** enum 추가 (타입 안전성)
+  - **SCADA_Command_t** 구조체: SCADA → Master 명령 (입력)
+    - `cmd_ready` (Precharge 시작 명령)
+    - `cmd_run` (운전 명령)
+    - `control_mode`, `parallel_mode`
+    - `V_max_cmd`, `V_min_cmd`, `I_cmd`, `V_cmd`, `I_max_cmd`, `I_min_cmd`
+  - **Master_Status_t** 구조체: Master → SCADA 상태 (출력)
+    - `ready`, `running`, `precharge_ok`
+    - `sequence_step`, `fault_latched`
+    - `over_voltage`, `over_current`, `over_temp`
+    - `V_out`, `V_batt`, `I_out`
+  - 마이그레이션된 함수 7개 (Parse_SCADA_Command, Update_SCADA_Watchdog, Update_System_Sequence, Check_Fault, Sensing_And_Trigger_PI, Apply_PI_And_Convert_DAC, INT_EPWM1_ISR)
+  - 레거시 호환성 유지 (동기화 코드)
+- **장점**:
+  - 명확한 데이터 흐름 (입력 vs 출력 구분)
+  - 타입 안전성 향상 (enum 사용)
+  - 유지보수성 개선 (관련 변수 그룹화)
+  - 확장성 향상 (새 명령/상태 추가 용이)
+- **소요 시간**: 3시간
+
+### ~~2. 고장 래칭 메커니즘 추가~~ ✅ 완료 (2025-10-27)
+- **파일**: `HABA_control.c:515-569`, `HABA_globals.h:713-714`, `HABA_globals.c:266-267`
+- **완료 내용**:
+  - 고장 발생 시 `master_status.fault_latched = true`, `run = 0` 강제 설정
+  - IDLE 상태 전환 시 자동 리셋 (프리차지 보존)
+  - Fault 발생 → STOP 유지 (V_out ≈ V_batt) → IDLE 명령 → 자동 리셋
+  - CMD bit[3] Reset 비트 제거 (프로토콜 변경 불필요)
+- **동작 시퀀스**:
+  1. 정상 운전 → Fault 발생 → run=0, master_status.fault_latched=true
+  2. STOP 상태 유지 (프리차지 전압 보존)
+  3. SCADA IDLE 명령 (scada_cmd.cmd_ready=0) → master_status.fault_latched=false (자동 리셋)
+  4. IDLE → READY → RUN 재시작
+- **장점**:
+  - 프로토콜 수정 불필요 (CMD bit[3] 향후 확장용으로 보존)
+  - 직관적 (IDLE = 초기화 개념)
+  - 프리차지 보존 (빠른 재시작)
+  - 간헐적 고장 방지 (안전성 확보)
+  - 구조체 통합 (Master_Status_t)
+- **소요 시간**: 40분
+
+### ~~3. Master-to-Master 프로토콜 Rev 1.0 및 동적 전류 분배 구현~~ ✅ 완료 (2025-10-28)
+- **파일**:
+  - `HABA_globals.h:21, 496-546, 788-798`
+  - `HABA_globals.c:383-410`
+  - `HABA_control.c:294-317, 760-771, 938-956, 1095-1195, 1761-1801`
+  - `HABA_control.h:57-58, 83`
+  - `HABA_main.c:142-143, 199-203`
+- **완료 내용**:
+  - **Master-to-Master 프로토콜 Rev 1.0** (병렬 모드 전용)
+    - CRC-32 검증 (VCU2 하드웨어 가속, ~0.5μs)
+    - STX + ETX + 고정 바이트 수 프레임 동기화
+    - 5ms 타임아웃 감시 (`Update_MM_Watchdog()`)
+    - 스파이크 거부 (±30% 변화량 필터링)
+    - 통신 통계 추적 (`MM_Statistics_t`)
+  - **양방향 통신**
+    - M1 → M2: 전류 지령 (20kHz, Phase 2)
+    - M2 → M1: 슬레이브 개수 전송 (100ms, 병렬 모드)
+    - `Send_RS485_MM_SlaveCount()` 함수 추가
+  - **상태 머신 기반 수신 ISR**
+    - `SCIA_RS485_MM_Rx_ISR()` 완전 재작성
+    - `MM_RxState_t` enum (WAIT_STX, RECEIVING)
+    - 프레임 타입 자동 감지 (전류 vs 슬레이브 개수)
+  - **동적 슬레이브 개수 기반 전류 분배**
+    - 개별 모드: `I_total / active_slave_list.count`
+    - 병렬 모드: 가중 분배 (CH1/CH2 슬레이브 비율 반영)
+    - 예시: CH1=6, CH2=4, 480A → 양쪽 모두 48A/모듈 (균등)
+  - **Precharge 전류 수정**
+    - 기존: 2A 시스템 전류 (모듈당 0.33A)
+    - 수정: 2A/모듈 × 슬레이브 개수
+    - 개별 모드 6모듈: 12A, 병렬 모드 12모듈: 24A
+- **해결한 문제**:
+  - 병렬 모드 채널간 전류 불균형 (M2 슬레이브 개수 미전달)
+  - Master-to-Master 통신 신뢰성 (CRC 오류, 타임아웃, 프레임 동기화)
+  - Precharge 전류 부족 (2A → 2A/모듈)
+- **소요 시간**: 4시간
+- **버전**: v2.3.0
+
+### ~~4. 과온도 임계값 긴급 수정~~ ✅ 완료 (2025-10-20)
 - **파일**: `HABA_globals.h:109`
 - **완료 내용**:
   - OVER_TEMP: 120°C → **85°C** (강제 공랭 팬×3 고려)
@@ -17,35 +101,11 @@
 
 ## 🔴 CRITICAL Priority
 
-### 1. 고장 래칭 메커니즘 추가
-- **파일**: `HABA_control.c:508-541`, `HABA_globals.h`
-- **설명**:
-  - 현재: 고장 조건 해제 시 즉시 복구 → 간헐적 고장 시 불안정
-  - 필요: 고장 발생 시 래칭, SCADA 명령으로만 수동 리셋
-- **구현 내용**:
-  ```c
-  // HABA_globals.h
-  extern volatile bool fault_latched;
-
-  // HABA_control.c
-  static bool fault_latched = false;
-  if (is_fault_active && !fault_latched) {
-      fault_latched = true;
-      run = 0;
-  }
-  // SCADA 리셋 명령 처리
-  ```
-- **출처**: POWER_CONTROL_REVIEW.md, IMPROVEMENT_CHECKLIST.md
-- **예상 시간**: 30분
-- **담당**: dougshin
-- **마감**: 2025-10-22
-- **우선순위**: ⚠️⚠️ 높음
-
 ---
 
 ## 🔴 HIGH Priority
 
-### 3. PI 게인 재튜닝 검증 (DCL 전환 후)
+### 1. PI 게인 재튜닝 검증 (DCL 전환 후)
 - **파일**: `HABA_setup.c:350`, `HABA_cla_tasks.cla`
 - **설명**:
   - 첫 커밋: 수동 PI 구현 → 현재: DCL_runPI_L2() (parallel form)
@@ -63,30 +123,7 @@
 - **마감**: 2025-10-25
 - **우선순위**: ⚠️ 높음
 
-### 4. CH2 전류 지령 수신 타임아웃 체크
-- **파일**: `HABA_control.c:929` (SCIA_RS485_MM_Rx_ISR), `HABA_globals.h`
-- **설명**:
-  - 병렬 모드에서 RS485 통신 끊김 시 `I_cmd_from_master`가 오래된 값 유지
-  - 안전값(0A) 적용 필요
-- **구현 내용**:
-  ```c
-  static uint16_t ch2_rx_timeout_cnt = 0;
-  if (rxBuffer[0] == STX) {
-      I_cmd_from_master = current;
-      ch2_rx_timeout_cnt = 0;  // 리셋
-  }
-  // Phase 1에서 타임아웃 체크
-  if (++ch2_rx_timeout_cnt > 100) {  // 5ms
-      I_cmd_from_master = 32768;  // 안전값 (0A)
-  }
-  ```
-- **출처**: 첫 커밋 비교 분석, IMPROVEMENT_CHECKLIST.md
-- **예상 시간**: 1시간
-- **담당**: dougshin
-- **마감**: 2025-10-25
-- **우선순위**: ⚠️ 높음
-
-### 5. NTC 온도 센싱 구현
+### 2. NTC 온도 센싱 구현
 - **파일**:
   - `HABA_control.c:396` (Phase 3)
   - `HABA_control.c:431` (TODO 주석)
@@ -106,7 +143,7 @@
 - **담당**: dougshin
 - **마감**: 2025-11-15
 
-### 6. 과전류 임계값 마진 확보
+### 3. 과전류 임계값 마진 확보
 - **파일**: `HABA_globals.h:108`
 - **설명**:
   - 현재: OVER_CURRENT = 88.0A (정격 80A + 10%)
@@ -121,7 +158,7 @@
 - **마감**: 2025-10-22
 - **우선순위**: 높음
 
-### 7. Battery Mode CV 제어 완성 및 튜닝
+### 4. Battery Mode CV 제어 완성 및 튜닝
 - **파일**:
   - `HABA_control.c:1252` (TODO 주석)
   - `HABA_cla_tasks.cla` (CLA Task 3)
@@ -138,52 +175,37 @@
 - **담당**: dougshin
 - **마감**: 2025-11-10
 
-### 7-1. 슬레이브 과전력(OP) 보호 구현 (RS-232 Rev5 반영)
-- **파일**:
-  - `HABA_control.c` (Phase 3: Check_System_Safety)
-  - `HABA_control.c` (Send_Slave_Batch_To_SCADA)
-  - `HABA_globals.h`, `HABA_globals.c`
-- **설명**:
-  - RS-232 SCADA 프로토콜 Rev5에서 슬레이브 Fault 비트맵에 OP(Over Power) 추가
-  - 슬레이브는 자체 보호 장치가 있지만, 마스터에서도 전력 모니터링 필요
-  - V×I 곱으로 전력 계산하여 정격(30kW) 초과 감지
-- **구현 내용**:
-  ```c
-  // HABA_globals.h
-  #define OVER_POWER_SLAVE (35.0f)  // 30kW + 15% 여유 [kW]
-  extern float32_t V_out_slave[16];  // 슬레이브 전압 (추가 필요 시)
-  extern uint8_t over_power_slave[16];  // OP 플래그
+### 5. 마스터 고장 정보 SCADA 피드백 추가
+- **파일**: `HABA_control.c:1364` (Send_System_Voltage_To_SCADA), `HABA_globals.h`
+- **설명**: 현재 시스템 전압 패킷에 마스터 고장 정보 없음 → SCADA가 고장 원인 파악 불가
+- **구현**: System_Voltage_Packet에 status 바이트 추가 (fault_latched, OV, OC, OT)
+- **예상 시간**: 1시간
+- **우선순위**: 높음
 
-  // HABA_control.c - Phase 3 또는 슬레이브 데이터 수신 시
-  for (uint8_t id = 1; id <= 15; id++) {
-      if (!DAB_ok_slave[id]) continue;
-
-      // 전력 계산 (kW)
-      float power = fabsf(V_out_slave[id] * I_out_slave[id]) / 1000.0f;
-
-      if (power > OVER_POWER_SLAVE) {
-          over_power_slave[id] = 1;
-      } else {
-          over_power_slave[id] = 0;
-      }
-  }
-
-  // Send_Slave_Batch_To_SCADA() - OP 비트 추가
-  if (over_power_slave[slave_id]) fault |= 0x80;  // bit7
-  ```
-- **참고**:
-  - 슬레이브 전압(`V_out_slave[]`)을 CAN으로 수신하는지 확인 필요
-  - 현재는 전류(`I_out_slave[]`)와 온도만 수신
-  - V_out_slave[] 추가 또는 마스터 V_out로 근사 (병렬 모드)
-- **프로토콜 명세**: `docs/RS232_SCADA_protocol_rev5.md`
-- **예상 시간**: 2시간 (전압 데이터 확인 + 구현)
-- **담당**: dougshin
-- **마감**: 2025-11-15
-- **우선순위**: 중간 (슬레이브 자체 보호 존재, 모니터링 목적)
+### 6. 슬레이브 과전력(OP) 보호 구현 (RS-232 Rev5 반영)
+- **파일**: `HABA_control.c` (Phase 3, Send_Slave_Batch_To_SCADA)
+- **설명**: V×I 전력 계산하여 30kW 초과 감지, OP 비트 송신
+- **참고**: 슬레이브 전압 데이터 확인 필요 (현재 전류+온도만 수신)
+- **예상 시간**: 2시간
+- **우선순위**: 중간
 
 ---
 
 ## 🟡 MEDIUM Priority
+
+### 7. 개별 모드 Master-to-Master 제어 구현
+- **파일**: `HABA_control.c`, `HABA_main.c`
+- **설명**:
+  - 현재: 병렬 모드에서만 M1→M2 통신 (전류 지령)
+  - 개별 모드 확장: M1을 통해 M2 제어 (통합 HMI)
+- **구현 내용**:
+  - 개별 모드에서 SCIA M1→M2 통신 활성화
+  - M2가 M1 지령 수신 후 독립 PI 제어 실행
+  - 제어 메커니즘 구체화 필요 (추후 설계)
+- **예상 시간**: 미정
+- **담당**: 미정
+- **마감**: 미정
+- **우선순위**: 중간
 
 ### 8. RS485 스킵 카운터 모니터링
 - **파일**: `HABA_control.c:344`, `HABA_main.c` (10ms 작업), `HABA_globals.h`
@@ -211,27 +233,34 @@
 - **마감**: 2025-10-30
 - **우선순위**: 중간
 
-### 9. 병렬 모드 채널간 전류 불균형 모니터링
-- **파일**: `HABA_control.c:548` (Apply_Current_Reference_Limit)
+### 9. 병렬 모드 채널간 부하 모니터링 (실시간 슬레이브 개수 불일치)
+- **파일**: `HABA_control.c` (Phase 4), `HABA_main.c` (10ms 작업)
 - **설명**:
-  - CH1-CH2 간 전류 불균형 감시 (5% 초과 시 경고)
-  - 병렬 모드 품질 향상
+  - **구현 완료**: 동적 가중 분배로 슬레이브 개수 불일치 해결 (v2.3.0)
+  - **추가 필요**: 실시간 모니터링 및 경고 메시지
+    - M2→M1 슬레이브 개수 변동 감지 (고장/복구)
+    - 부하 불균형 경고 (5% 초과 시)
+    - SCADA 피드백 (채널별 슬레이브 개수 송신)
 - **구현 내용**:
   ```c
-  if (operation_mode == MODE_PARALLEL) {
-      float32_t ch1_total = 0, ch2_total = 0;
-      for (int i=1; i<=6; i++)  ch1_total += I_out_slave[i];
-      for (int i=7; i<=12; i++) ch2_total += I_out_slave[i];
-
-      float32_t imbalance = fabsf(ch1_total - ch2_total) / (ch1_total + ch2_total);
-      if (imbalance > 0.05f)
-          warn_channel_imbalance = true;
+  // 슬레이브 개수 변동 감지
+  static uint8_t ch2_prev_count = 0;
+  if (ch2_slave_count != ch2_prev_count) {
+      log_slave_count_change(ch2_prev_count, ch2_slave_count);
+      ch2_prev_count = ch2_slave_count;
   }
+
+  // 부하 불균형 모니터링
+  float32_t ch1_avg = I_total_ch1 / active_slave_list.count;
+  float32_t ch2_avg = I_total_ch2 / ch2_slave_count;
+  float32_t imbalance = fabsf(ch1_avg - ch2_avg) / ch1_avg;
+  if (imbalance > 0.05f)
+      warn_load_imbalance = true;
   ```
-- **출처**: POWER_CONTROL_REVIEW.md, IMPROVEMENT_CHECKLIST.md
+- **출처**: v2.3.0 개선, POWER_CONTROL_REVIEW.md
 - **예상 시간**: 1시간
 - **담당**: dougshin
-- **마감**: 2025-10-30
+- **마감**: 2025-11-05
 - **우선순위**: 중간
 
 ### 10. RS485 DMA 전환 (성능 최적화)
@@ -362,13 +391,31 @@
 
 ## ✅ Completed
 
-### 2025-10-20 (Latest)
+### 2025-10-27 (Latest)
+- **구조 기반 아키텍처 마이그레이션 (Structure-Based Architecture)**
+  - SequenceStep_t enum, SCADA_Command_t, Master_Status_t 구조체 추가
+  - 7개 함수 마이그레이션 완료 (레거시 호환성 유지)
+  - 명확한 데이터 흐름 (입력 vs 출력 분리)
+  - 파일: `HABA_globals.h/c`, `HABA_control.c`, `HABA_main.c`
+
+- **고장 래칭 메커니즘 추가**
+  - `master_status.fault_latched` 변수 추가
+  - 고장 시 즉시 정지, IDLE 상태에서 자동 리셋
+  - STOP 상태 유지로 프리차지 보존
+  - 파일: `HABA_control.c:515-569`
+
+- **문서 정리**
+  - `IMPROVEMENT_CHECKLIST.md` 삭제 (TODO.md와 중복)
+  - `SAFETY_AND_SEQUENCE_ANALYSIS.md` 삭제 (모든 이슈 해결)
+  - `REV5_IMPLEMENTATION_PLAN.md` 삭제 (구현 완료)
+  - 최종 문서 9개로 정리
+
+### 2025-10-20
 - **첫 커밋 대비 오작동 가능성 심층 분석**
   - 첫 커밋(ec95937) vs 현재(b7dfcca) 비교 분석 완료
   - 종합 점수: 6.4/10 → 9.0/10 (+2.6점 향상)
   - 주요 개선: PI 제어기 DCL 전환, 적분기 초기화, TX FIFO 블로킹 방지
   - 신규 발견: CH2 수신 타임아웃 체크 부재, PI 게인 재튜닝 필요성
-  - 문서: `docs/IMPROVEMENT_CHECKLIST.md` 생성
 
 ### 2025-10-20
 - **RS485 TX FIFO 블로킹 방지 로직 추가**
@@ -442,8 +489,8 @@
 - `docs/PROJECT_INDEX.md`: API 레퍼런스
 - `docs/POWER_CONTROL_REVIEW.md`: PI 튜닝 가이드
 - `docs/CODE_ANALYSIS_REPORT.md`: 코드 품질/보안 분석
-- `docs/IMPROVEMENT_CHECKLIST.md`: 개선사항 체크리스트 (NEW!)
-- `docs/RS232_interface_protocol_rev4.md`: SCADA 프로토콜
+- `docs/RS232_SCADA_protocol_rev5.md`: SCADA 프로토콜 최신 버전
+- `docs/RS232_SCADA_protocol_rev4.md`: SCADA 프로토콜 이전 버전
 - `CHANGELOG.md`: 버전 이력
 
 ---
