@@ -30,6 +30,37 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.3.1] - 2025-10-29
+
+### Changed
+- **OperationMode_t enum 리팩토링 (코드 명확성 개선)**
+  - MODE_STOP, MODE_RESERVED 제거 (미사용 상태 정리)
+  - MODE_INDIVIDUAL = 0 (기본값), MODE_PARALLEL = 1
+  - Run/Stop 제어와 완전 분리 명확화 (scada_cmd.cmd_run, run 변수로 독립 제어)
+
+- **기본 운전 모드 변경**
+  - 초기값: MODE_STOP → MODE_INDIVIDUAL
+  - 논리적 기본값 개선 (개별 운전이 안전한 기본 상태)
+
+- **SCADA 타임아웃 처리 개선**
+  - operation_mode 강제 변경 제거 (채널 구성은 명시적 명령으로만 변경)
+  - Run/Stop 제어만 초기화 (scada_cmd.cmd_run = 0)
+
+### Documentation
+- **3가지 독립 제어 계층 명확화**
+  - **Operation Mode**: 채널 구성 (개별/병렬) - 하드웨어 토폴로지
+  - **Control Mode**: 제어 알고리즘 (충방전/배터리) - 제어 전략
+  - **Run Control**: 운전/정지 - 시스템 활성화
+- CLAUDE.md, PROJECT_INDEX.md, QUICK_REFERENCE.md 업데이트
+
+### Technical Details
+- `HABA_globals.h:322-327`: enum 정의 단순화 (4개 → 2개 상태)
+- `HABA_globals.c:81`: 초기값 MODE_INDIVIDUAL로 변경
+- `HABA_control.c:1770`: SCADA 타임아웃 시 operation_mode 유지
+- 하위 호환성 유지 (SCADA 프로토콜 변경 없음)
+
+---
+
 ## [2.3.0] - 2025-10-28
 
 ### Added

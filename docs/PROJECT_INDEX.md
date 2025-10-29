@@ -221,16 +221,16 @@
 
 ## 📊 데이터 구조
 
-### 운전 모드 (OperationMode_t)
+### 운전 모드 (OperationMode_t) - 채널 구성
+**중요**: Run/Stop 제어와 독립적 (scada_cmd.cmd_run, run 변수로 제어)
 ```c
 typedef enum {
-    MODE_STOP        = 0,   // 정지
-    MODE_INDIVIDUAL  = 1,   // 개별 운전
-    MODE_PARALLEL    = 2,   // 병렬 운전
+    MODE_INDIVIDUAL  = 0,   // 개별 운전 (CH1, CH2 독립) - 기본값
+    MODE_PARALLEL    = 1    // 병렬 운전 (CH1+CH2 통합)
 } OperationMode_t;
 ```
 
-### 제어 모드 (ControlMode_t)
+### 제어 모드 (ControlMode_t) - 제어 알고리즘
 ```c
 typedef enum {
     CONTROL_MODE_CHARGE_DISCHARGE = 0,  // 충방전 모드 (V_max/V_min)

@@ -78,7 +78,7 @@ Master_Status_t master_status = {
 // 시스템 제어 변수
 //==================================================
 SystemState      state              = STATE_NO_OP;      // 시스템 상태
-OperationMode_t  operation_mode     = MODE_STOP;        // 운전 모드
+OperationMode_t  operation_mode     = MODE_INDIVIDUAL;  // 운전 모드 (기본: 개별)
 uint32_t         control_phase      = 0;                // 제어 Phase (0~4)
 uint16_t         start_stop         = 0;                // START(1) / STOP(0)
 uint32_t         run                = 0;                // 실행 플래그

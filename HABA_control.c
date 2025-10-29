@@ -1767,7 +1767,7 @@ void Update_SCADA_Watchdog(void)
             start_stop = 0;
             run_state = 0;
             ready_state = 0;
-            operation_mode = MODE_STOP;
+            // operation_mode은 유지 (채널 구성, Run/Stop과 독립적)
 
             // 릴레이 OFF
             GPIO8_CLEAR();  // 메인 릴레이

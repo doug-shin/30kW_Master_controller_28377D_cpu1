@@ -210,7 +210,7 @@ master_status.running         // 운전 중
 master_status.fault_latched   // 고장 래치
 
 // 레거시 변수 (하위 호환성)
-operation_mode  // MODE_STOP(0), MODE_INDIVIDUAL(1), MODE_PARALLEL(2)
+operation_mode  // MODE_INDIVIDUAL(0), MODE_PARALLEL(1) - Run/Stop과 독립
 sequence_step   // 레거시 (master_status와 동기화)
 run             // 실행 플래그 (비상 정지 스위치 + 고장 래치)
 ```

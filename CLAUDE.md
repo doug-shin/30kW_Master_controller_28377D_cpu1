@@ -226,22 +226,24 @@ pi_charge.Imax = 80.0f;           // 적분기 상한 (동적 업데이트)
 
 ## 운전 모드
 
-### Operation Mode (`operation_mode`)
+### Operation Mode (`operation_mode`) - 채널 구성
+**중요**: Run/Stop 제어와 완전 독립 (`scada_cmd.cmd_run`, `run` 변수로 제어)
+
 ```c
-MODE_STOP (0)        // 시스템 정지
-MODE_INDIVIDUAL (1)  // CH1, CH2 독립 제어 (각각 6모듈씩)
-MODE_PARALLEL (2)    // CH1이 CH2 제어 (12모듈 통합, Master1이 PI, Master2는 패스스루)
+MODE_INDIVIDUAL (0)  // CH1, CH2 독립 제어 (각각 6모듈씩) - 기본값
+MODE_PARALLEL (1)    // CH1이 CH2 제어 (12모듈 통합, Master1이 PI, Master2는 패스스루)
 ```
 
-### Control Mode (`control_mode`)
+### Control Mode (`control_mode`) - 제어 알고리즘
 ```c
 CONTROL_MODE_CHARGE_DISCHARGE (0)  // 충방전: V_max/V_min 한계, I_cmd 제어
 CONTROL_MODE_BATTERY (1)           // 배터리: V_cmd CV 제어, I_max/I_min 한계
 ```
 
-**모드 영향**:
-- Operation Mode → PI 제어 활성화, 릴레이 구성, 전류 라우팅
-- Control Mode → CLA Task 선택(1+2 vs 3), 제어 파라미터 사용
+**모드 역할 분리**:
+- **Operation Mode**: 채널 구성만 결정 (개별 vs 병렬), 릴레이 구성, 전류 라우팅
+- **Control Mode**: CLA Task 선택(1+2 vs 3), 제어 파라미터 사용
+- **Run Control**: `scada_cmd.cmd_run`과 `run` 변수로 독립 제어
 
 **병렬 모드 동작**:
 - Master1 (CH1): PI 제어 실행 → RS485로 CH2에 지령 전달

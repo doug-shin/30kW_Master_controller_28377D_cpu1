@@ -319,12 +319,11 @@ typedef enum {
 // Enumeration Types (열거형)
 //==================================================
 
-// --- 운전 모드 ---
+// --- 운전 모드 (채널 구성) ---
+// 주의: Run/Stop 제어와 독립적 (scada_cmd.cmd_run, run 변수로 제어)
 typedef enum {
-    MODE_STOP        = 0,   // 정지
-    MODE_INDIVIDUAL  = 1,   // 개별 운전 (CH1, CH2 각각 독립 제어)
-    MODE_PARALLEL    = 2,   // 병렬 운전 (상위 마스터만 PI, 하위는 전달만)
-    MODE_RESERVED    = 3    // 예약 (미사용)
+    MODE_INDIVIDUAL  = 0,   // 개별 운전 (CH1, CH2 각각 독립 제어)
+    MODE_PARALLEL    = 1    // 병렬 운전 (CH1+CH2 통합, Master1이 PI, Master2는 패스스루)
 } OperationMode_t;
 
 // --- 제어 모드 ---
